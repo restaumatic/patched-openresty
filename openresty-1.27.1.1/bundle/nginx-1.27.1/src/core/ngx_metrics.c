@@ -5,9 +5,13 @@
 #define METRIC_INIT(name) { name, 0, 0, 0, 0 }
 
 ngx_metric_t ngx_metric_event_handler_time_ns = METRIC_INIT("event_handler_time_ns");
+ngx_metric_t ngx_metric_open_and_stat_file_time_ns = METRIC_INIT("open_and_stat_file_time_ns");
+ngx_metric_t ngx_metric_event_loop_latency_ns = METRIC_INIT("event_loop_latency_ns");
 
 ngx_metric_t *metrics[] = {
-  &ngx_metric_event_handler_time_ns
+  &ngx_metric_event_handler_time_ns,
+  &ngx_metric_open_and_stat_file_time_ns,
+  &ngx_metric_event_loop_latency_ns,
 };
 
 void
