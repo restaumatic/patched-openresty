@@ -8,6 +8,7 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_event.h>
+#include <ngx_metrics.h>
 
 
 #define DEFAULT_CONNECTIONS  512
@@ -33,7 +34,6 @@ static char *ngx_event_debug_connection(ngx_conf_t *cf, ngx_command_t *cmd,
 
 static void *ngx_event_core_create_conf(ngx_cycle_t *cycle);
 static char *ngx_event_core_init_conf(ngx_cycle_t *cycle, void *conf);
-
 
 static ngx_uint_t     ngx_timer_resolution;
 sig_atomic_t          ngx_event_timer_alarm;
@@ -298,7 +298,9 @@ ngx_process_events_and_timers(ngx_cycle_t *cycle)
 
         ngx_delete_posted_event(ev);
 
+        int64_t start = ngx_precise_time();
         ev->handler(ev);
+        ngx_metric_report(&ngx_metric_event_handler_time_ns, ngx_precise_time() - start);
     }
 }
 

@@ -8,6 +8,7 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_event.h>
+#include <ngx_metrics.h>
 
 
 #if (NGX_TEST_BUILD_EPOLL)
@@ -898,7 +899,9 @@ ngx_epoll_process_events(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags)
                 ngx_post_event(rev, queue);
 
             } else {
+                int64_t start = ngx_precise_time();
                 rev->handler(rev);
+                ngx_metric_report(&ngx_metric_event_handler_time_ns, ngx_precise_time() - start);
             }
         }
 
@@ -927,7 +930,9 @@ ngx_epoll_process_events(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags)
                 ngx_post_event(wev, &ngx_posted_events);
 
             } else {
+                int64_t start = ngx_precise_time();
                 wev->handler(wev);
+                ngx_metric_report(&ngx_metric_event_handler_time_ns, ngx_precise_time() - start);
             }
         }
     }
