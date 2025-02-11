@@ -9,10 +9,6 @@ Instead, it's an openresty release bundle unpacked into a Git repository.
 
 Added a metrics system.
 
-extern ngx_metric_t ngx_metric_event_handler_time_ns;
-extern ngx_metric_t ngx_metric_open_and_stat_file_time_ns;
-extern ngx_metric_t ngx_metric_event_loop_latency_ns;
-
 The included metrics are:
 
 - `event_handler_time_ns`: Time spent in event handlers in the event loop
