@@ -300,7 +300,11 @@ ngx_process_events_and_timers(ngx_cycle_t *cycle)
 
         int64_t start = ngx_precise_time();
         ev->handler(ev);
-        ngx_metric_report(&ngx_metric_event_handler_time_ns, ngx_precise_time() - start);
+        int64_t elapsed = ngx_precise_time() - start;
+        ngx_metric_report(&ngx_metric_event_handler_time_ns, elapsed);
+        if(elapsed > 100000000) {
+            ngx_log_error(NGX_LOG_WARN, cycle->log, 0, "event handler %p took %ld ms", ev->handler, elapsed / 1000000);
+        }
     }
 }
 
