@@ -33,9 +33,6 @@ RESTY_CONFIG_OPTIONS=(
       --with-stream_ssl_module 
       --with-stream_ssl_preread_module 
       --with-threads 
-      --with-debug
-      --with-cc-opt='-g -O -rdynamic -fvisibility=default'
-      --with-ld-opt='-g -O -rdynamic -fvisibility=default'
     )
 
 ./configure -j$(nproc) "${RESTY_CONFIG_OPTIONS[@]}"
