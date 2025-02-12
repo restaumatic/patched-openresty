@@ -1,0 +1,10 @@
+#!/bin/bash
+
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+exe="${1:-build/nginx-1.27.1/objs/nginx}"
+
+nm -a "$exe" | grep -E ' [tT] ' | sort > "${exe}.symbols"
+echo "Generated symbols file: ${exe}.symbols"

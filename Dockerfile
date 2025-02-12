@@ -197,6 +197,9 @@ RUN cd ./openresty-${RESTY_VERSION} \
     && ln -sf /dev/stdout /usr/local/openresty/nginx/logs/access.log \
     && ln -sf /dev/stderr /usr/local/openresty/nginx/logs/error.log
 
+COPY ./generate-symbols .
+RUN ./generate-symbols /usr/local/openresty/bin/openresty
+
 # Add additional binaries into PATH for convenience
 ENV PATH=$PATH:/usr/local/openresty/luajit/bin:/usr/local/openresty/nginx/sbin:/usr/local/openresty/bin
 

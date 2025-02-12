@@ -907,11 +907,7 @@ ngx_epoll_process_events(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags)
             } else {
               int64_t start = ngx_precise_time();
               rev->handler(rev);
-              int64_t elapsed = ngx_precise_time() - start;
-              ngx_metric_report(&ngx_metric_event_handler_time_ns, elapsed);
-              if(elapsed > 100000000) {
-                ngx_log_error(NGX_LOG_WARN, cycle->log, 0, "event handler %p took %ld ms", rev->handler, elapsed / 1000000);
-              }
+              ngx_metrics_report_event_handler_time(rev->handler, ngx_precise_time() - start);
             }
         }
 
@@ -942,11 +938,7 @@ ngx_epoll_process_events(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags)
             } else {
               int64_t start = ngx_precise_time();
               wev->handler(wev);
-              int64_t elapsed = ngx_precise_time() - start;
-              ngx_metric_report(&ngx_metric_event_handler_time_ns, elapsed);
-              if(elapsed > 100000000) {
-                ngx_log_error(NGX_LOG_WARN, cycle->log, 0, "event handler %p took %ld ms", wev->handler, elapsed / 1000000);
-              }
+              ngx_metrics_report_event_handler_time(wev->handler, ngx_precise_time() - start);
             }
         }
     }

@@ -7,6 +7,7 @@
 
 #include <ngx_config.h>
 #include <ngx_core.h>
+#include <ngx_metrics.h>
 #include <nginx.h>
 
 
@@ -242,6 +243,8 @@ main(int argc, char *const *argv)
 #if (NGX_OPENSSL)
     ngx_ssl_init(log);
 #endif
+
+    ngx_metrics_init(log);
 
     /*
      * init_cycle->log is required for signal handlers and
