@@ -1,13 +1,7 @@
 #ifndef _NGX_METRICS_H_INCLUDED_
 #define _NGX_METRICS_H_INCLUDED_
 
-#include <ngx_config.h>
-#include <ngx_core.h>
 #include <stdint.h>
-
-#include <luajit.h>
-#include <lualib.h>
-#include <lauxlib.h>
 
 typedef struct {
   const char *name;
@@ -19,7 +13,10 @@ typedef struct {
   int64_t max;
 } ngx_metric_t;
 
-void ngx_metrics_init();
+struct ngx_log_s;
+typedef struct ngx_log_s             ngx_log_t;
+
+void ngx_metrics_init(ngx_log_t *log);
 
 int ngx_get_num_metrics();
 ngx_metric_t *ngx_get_metric(int index);
@@ -35,6 +32,9 @@ void ngx_metric_report(ngx_metric_t *metric, int64_t value);
 void ngx_metrics_report_event_handler_time(void *handler, int64_t value);
 
 int64_t ngx_precise_time();
+
+struct lua_State;
+typedef struct lua_State lua_State;
 
 int ngx_metrics_dump_lua_stack(lua_State *L, char *buf, int bufsize);
 

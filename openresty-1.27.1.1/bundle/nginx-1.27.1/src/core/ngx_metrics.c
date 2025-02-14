@@ -1,6 +1,8 @@
 #define _GNU_SOURCE
 
 #include <ngx_metrics.h>
+#include <ngx_config.h>
+#include <ngx_core.h>
 #include <ngx_log.h>
 
 #include <time.h>
@@ -173,11 +175,7 @@ bool ngx_metrics_init_symbols(ngx_log_t *log) {
   return true;
 }
 
-void ngx_metrics_hello();
-
 void ngx_metrics_init(ngx_log_t *log) {
-  ngx_metrics_hello();
-
   if(!ngx_metrics_init_symbols(log)) {
     // TODO: exit or what?
     return;

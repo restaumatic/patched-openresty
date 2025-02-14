@@ -12,6 +12,7 @@
 
 
 #include "nginx.h"
+#include "ngx_metrics.h"
 #include "ngx_http_lua_directive.h"
 #include "ngx_http_lua_util.h"
 #include "ngx_http_lua_exception.h"
@@ -1191,19 +1192,18 @@ ngx_http_lua_run_thread(lua_State *L, ngx_http_request_t *r,
             ngx_http_lua_assert(orig_coctx->co_top + nrets
                                 == lua_gettop(orig_coctx->co));
 
-    lua_Debug ar;
-    for(int level = 0; lua_getstack(orig_coctx->co, level, &ar); level++) {
-        if (lua_getinfo(orig_coctx->co, "Sln", &ar)) {
-            /* ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, */ 
-            fprintf(stderr,
-                          "LUA Function: %s, Source: %s, Line: %d\n",
-                          ar.name ? ar.name : "[anonymous]",
-                          ar.source,
-                          ar.currentline);
-        }
-    }
+            char stack[1024]; 
+            int stack_len = ngx_metrics_dump_lua_stack(orig_coctx->co, stack, sizeof(stack));
+            int64_t start = ngx_precise_time();
 
             rv = lua_resume(orig_coctx->co, nrets);
+
+            int64_t elapsed = ngx_precise_time() - start;
+            if(elapsed > 10000000) { // 10ms
+                ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                    "slow lua handler (%dms) at %s", elapsed / 1000000, stack_len > 0 ? stack : "(unknown)");
+            }
+            
 
 #if (NGX_PCRE)
             /* XXX: work-around to nginx regex subsystem */

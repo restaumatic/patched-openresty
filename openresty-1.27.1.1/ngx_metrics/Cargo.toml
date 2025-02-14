@@ -6,4 +6,8 @@ edition = "2021"
 [lib]
 crate-type = ["staticlib"]
 
+[build-dependencies]
+bindgen = "0.71.1"
+
 [dependencies]
+libc = "0.2.169"
