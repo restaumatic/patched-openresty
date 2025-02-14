@@ -46,7 +46,7 @@ fn dump_stack(l: *mut lua_State, mut writer: impl Write) -> std::io::Result<()> 
         if unsafe { lua_getstack(l, level, ar_u.as_mut_ptr()) } == 0 {
             break;
         }
-        if unsafe { lua_getinfo(l, "Sln\0".as_ptr() as *const i8, ar_u.as_mut_ptr()) } == 0 {
+        if unsafe { lua_getinfo(l, c"Sln".as_ptr(), ar_u.as_mut_ptr()) } == 0 {
             break;
         }
         let ar = unsafe { ar_u.assume_init() };
