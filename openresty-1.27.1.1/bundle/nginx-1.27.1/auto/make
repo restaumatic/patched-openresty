@@ -222,7 +222,6 @@ ngx_link=${CORE_LINK:+`echo $CORE_LINK \
 ngx_main_link=${MAIN_LINK:+`echo $MAIN_LINK \
     | sed -e "s/\//$ngx_regex_dirsep/g" -e "s/^/$ngx_long_regex_cont/"`}
 
-
 cat << END                                                    >> $NGX_MAKEFILE
 
 build:	binary modules manpage

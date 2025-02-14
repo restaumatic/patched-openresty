@@ -33,6 +33,7 @@ RESTY_CONFIG_OPTIONS=(
       --with-stream_ssl_module 
       --with-stream_ssl_preread_module 
       --with-threads 
+      --add-module=./ngx_metrics
     )
 
 ./configure -j$(nproc) "${RESTY_CONFIG_OPTIONS[@]}"

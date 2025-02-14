@@ -1,3 +1,3 @@
 openresty-1.27.1.1/build/*
 openresty-1.27.1.1/bundle/nginx-1.27.1/tags
-
+openresty-1.27.1.1/build/ngx_metrics/target/*

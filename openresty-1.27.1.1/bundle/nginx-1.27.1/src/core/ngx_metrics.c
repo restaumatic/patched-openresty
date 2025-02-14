@@ -173,7 +173,11 @@ bool ngx_metrics_init_symbols(ngx_log_t *log) {
   return true;
 }
 
+void ngx_metrics_hello();
+
 void ngx_metrics_init(ngx_log_t *log) {
+  ngx_metrics_hello();
+
   if(!ngx_metrics_init_symbols(log)) {
     // TODO: exit or what?
     return;
