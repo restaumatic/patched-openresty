@@ -1191,6 +1191,18 @@ ngx_http_lua_run_thread(lua_State *L, ngx_http_request_t *r,
             ngx_http_lua_assert(orig_coctx->co_top + nrets
                                 == lua_gettop(orig_coctx->co));
 
+    lua_Debug ar;
+    for(int level = 0; lua_getstack(orig_coctx->co, level, &ar); level++) {
+        if (lua_getinfo(orig_coctx->co, "Sln", &ar)) {
+            /* ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, */ 
+            fprintf(stderr,
+                          "LUA Function: %s, Source: %s, Line: %d\n",
+                          ar.name ? ar.name : "[anonymous]",
+                          ar.source,
+                          ar.currentline);
+        }
+    }
+
             rv = lua_resume(orig_coctx->co, nrets);
 
 #if (NGX_PCRE)

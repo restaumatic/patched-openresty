@@ -5,6 +5,10 @@
 #include <ngx_core.h>
 #include <stdint.h>
 
+#include <luajit.h>
+#include <lualib.h>
+#include <lauxlib.h>
+
 typedef struct {
   const char *name;
   const char *tags;
@@ -31,5 +35,7 @@ void ngx_metric_report(ngx_metric_t *metric, int64_t value);
 void ngx_metrics_report_event_handler_time(void *handler, int64_t value);
 
 int64_t ngx_precise_time();
+
+int ngx_metrics_dump_lua_stack(lua_State *L, char *buf, int bufsize);
 
 #endif /* _NGX_METRICS_H_INCLUDED_ */
