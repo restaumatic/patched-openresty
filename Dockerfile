@@ -71,6 +71,7 @@ ARG RESTY_CONFIG_OPTIONS="\
     --with-stream_ssl_module \
     --with-stream_ssl_preread_module \
     --with-threads \
+    --add-module=./ngx_metrics \
     "
 ARG RESTY_CONFIG_OPTIONS_MORE=""
 ARG RESTY_LUAJIT_OPTIONS="--with-luajit-xcflags='-DLUAJIT_NUMMODE=2 -DLUAJIT_ENABLE_LUA52COMPAT'"
@@ -171,6 +172,19 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
     && rm -rf \
         openssl-${RESTY_OPENSSL_VERSION}.tar.gz openssl-${RESTY_OPENSSL_VERSION} \
         pcre2-${RESTY_PCRE_VERSION}.tar.gz pcre2-${RESTY_PCRE_VERSION}
+
+# Install rustup
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > /tmp/rustup.sh && sh /tmp/rustup.sh -y --default-toolchain 1.84.0
+
+ENV PATH=$PATH:/root/.cargo/bin:/root/.rustup/bin
+
+COPY ./openresty-${RESTY_VERSION}/ngx_metrics/Cargo.toml ./openresty-${RESTY_VERSION}/ngx_metrics/Cargo.toml
+COPY ./openresty-${RESTY_VERSION}/ngx_metrics/Cargo.lock ./openresty-${RESTY_VERSION}/ngx_metrics/Cargo.lock
+
+# Build only dependencies
+RUN cd ./openresty-${RESTY_VERSION}/ngx_metrics \
+    && mkdir src && touch src/lib.rs \
+    && cargo build --release
 
 COPY ./openresty-${RESTY_VERSION} ./openresty-${RESTY_VERSION}
 
