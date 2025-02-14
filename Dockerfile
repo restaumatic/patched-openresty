@@ -129,6 +129,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
         unzip \
         wget \
         zlib1g-dev \
+        libclang-dev \
         ${RESTY_ADD_PACKAGE_BUILDDEPS} \
         ${RESTY_ADD_PACKAGE_RUNDEPS} \
     && cd /tmp \
@@ -178,13 +179,14 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > /tmp/rustup.sh &
 
 ENV PATH=$PATH:/root/.cargo/bin:/root/.rustup/bin
 
-COPY ./openresty-${RESTY_VERSION}/ngx_metrics/Cargo.toml ./openresty-${RESTY_VERSION}/ngx_metrics/Cargo.toml
-COPY ./openresty-${RESTY_VERSION}/ngx_metrics/Cargo.lock ./openresty-${RESTY_VERSION}/ngx_metrics/Cargo.lock
-
 # Build only dependencies
-RUN cd ./openresty-${RESTY_VERSION}/ngx_metrics \
-    && mkdir src && touch src/lib.rs \
-    && cargo build --release
+# FIXME: doesn't work, breaks build.
+# COPY ./openresty-${RESTY_VERSION}/ngx_metrics/Cargo.toml ./openresty-${RESTY_VERSION}/ngx_metrics/Cargo.toml
+# COPY ./openresty-${RESTY_VERSION}/ngx_metrics/Cargo.lock ./openresty-${RESTY_VERSION}/ngx_metrics/Cargo.lock
+# RUN cd ./openresty-${RESTY_VERSION}/ngx_metrics \
+#     && mkdir src && touch src/lib.rs \
+#     && cargo build --release \
+#     && rm -rf target/release/build/ngx_metrics-*
 
 COPY ./openresty-${RESTY_VERSION} ./openresty-${RESTY_VERSION}
 
