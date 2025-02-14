@@ -1199,7 +1199,7 @@ ngx_http_lua_run_thread(lua_State *L, ngx_http_request_t *r,
             rv = lua_resume(orig_coctx->co, nrets);
 
             int64_t elapsed = ngx_precise_time() - start;
-            if(elapsed > 10000000) { // 10ms
+            if(elapsed > 100000000) { // 100ms
                 ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                     "slow lua handler (%dms) at %s", elapsed / 1000000, stack_len > 0 ? stack : "(unknown)");
             }
