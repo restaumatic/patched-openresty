@@ -972,6 +972,71 @@ ngx_http_lua_ffi_ssl_raw_client_addr(ngx_http_request_t *r, char **addr,
 
 
 int
+ngx_http_lua_ffi_ssl_proxy_protocol_addr(ngx_http_request_t *r, char **addr,
+    size_t *addrlen, char **err)
+{
+    ngx_ssl_conn_t          *ssl_conn;
+    ngx_connection_t        *c;
+    ngx_proxy_protocol_t    *pp;
+
+    if (r->connection == NULL || r->connection->ssl == NULL) {
+        *err = "bad request";
+        return NGX_ERROR;
+    }
+
+    ssl_conn = r->connection->ssl->connection;
+    if (ssl_conn == NULL) {
+        *err = "bad ssl conn";
+        return NGX_ERROR;
+    }
+
+    c = ngx_ssl_get_connection(ssl_conn);
+
+    pp = c->proxy_protocol;
+    if (pp == NULL) {
+        return NGX_DECLINED;
+    }
+
+    *addr = (char *) pp->src_addr.data;
+    *addrlen = pp->src_addr.len;
+
+    return NGX_OK;
+}
+
+
+int
+ngx_http_lua_ffi_ssl_proxy_protocol_port(ngx_http_request_t *r,
+    unsigned short *port, char **err)
+{
+    ngx_ssl_conn_t          *ssl_conn;
+    ngx_connection_t        *c;
+    ngx_proxy_protocol_t    *pp;
+
+    if (r->connection == NULL || r->connection->ssl == NULL) {
+        *err = "bad request";
+        return NGX_ERROR;
+    }
+
+    ssl_conn = r->connection->ssl->connection;
+    if (ssl_conn == NULL) {
+        *err = "bad ssl conn";
+        return NGX_ERROR;
+    }
+
+    c = ngx_ssl_get_connection(ssl_conn);
+
+    pp = c->proxy_protocol;
+    if (pp == NULL) {
+        return NGX_DECLINED;
+    }
+
+    *port = pp->src_port;
+
+    return NGX_OK;
+}
+
+
+int
 ngx_http_lua_ffi_cert_pem_to_der(const u_char *pem, size_t pem_len, u_char *der,
     char **err)
 {

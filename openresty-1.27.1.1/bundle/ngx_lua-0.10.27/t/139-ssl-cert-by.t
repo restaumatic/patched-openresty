@@ -1966,7 +1966,7 @@ connected: 1
 ssl handshake: cdata
 sent http request: 56 bytes.
 received: HTTP/1.1 201 Created
-received: Server: nginx
+received: Server: openresty
 received: Content-Type: text/plain
 received: Content-Length: 4
 received: Connection: close
@@ -2075,7 +2075,7 @@ received: foo
 close: 1 nil
 
 --- error_log
-client socket file: 
+client socket file:
 
 --- no_error_log
 [error]
@@ -2083,7 +2083,237 @@ client socket file:
 
 
 
-=== TEST 24: ssl_certificate_by_lua* can yield when reading early data
+=== TEST 24: get proxy_protocol_addr with PROXY protocol
+--- ONLY
+--- http_config
+    lua_package_path "../lua-resty-core/lib/?.lua;;";
+
+    server {
+        listen 127.0.0.1:$TEST_NGINX_RAND_PORT_1 ssl proxy_protocol;
+        server_name   test.com;
+
+        ssl_certificate_by_lua_block {
+            local ssl = require "ngx.ssl"
+            print("ssl module loaded, type: ", type(ssl))
+            print("ssl.proxy_protocol_addr type: ", type(ssl.proxy_protocol_addr))
+            print("ssl.proxy_protocol_port type: ", type(ssl.proxy_protocol_port))
+            local addr, err = ssl.proxy_protocol_addr()
+            if addr then
+                print("proxy protocol addr: ", addr)
+            else
+                print("no proxy protocol addr")
+            end
+            local port, err = ssl.proxy_protocol_port()
+            if port then
+                print("proxy protocol port: ", port)
+            end
+        }
+        ssl_certificate ../../cert/test.crt;
+        ssl_certificate_key ../../cert/test.key;
+
+        server_tokens off;
+        location /foo {
+            default_type 'text/plain';
+            content_by_lua_block { ngx.status = 201 ngx.say("foo") ngx.exit(201) }
+            more_clear_headers Date;
+        }
+    }
+
+--- config
+    server_tokens off;
+    lua_ssl_trusted_certificate ../../cert/test.crt;
+
+    location /t {
+        content_by_lua_block {
+            do
+                local sock = ngx.socket.tcp()
+
+                sock:settimeout(2000)
+
+                local ok, err = sock:connect("127.0.0.1", $TEST_NGINX_RAND_PORT_1)
+                if not ok then
+                    ngx.say("failed to connect: ", err)
+                    return
+                end
+
+                ngx.say("connected: ", ok)
+
+                -- Send PROXY protocol v1 header
+                local proxy_line = "PROXY TCP4 192.0.2.1 198.51.100.1 56324 443\r\n"
+                local bytes, err = sock:send(proxy_line)
+                if not bytes then
+                    ngx.say("failed to send proxy protocol: ", err)
+                    return
+                end
+
+                local sess, err = sock:sslhandshake(nil, "test.com", true)
+                if not sess then
+                    ngx.say("failed to do SSL handshake: ", err)
+                    return
+                end
+
+                ngx.say("ssl handshake: ", type(sess))
+
+                local req = "GET /foo HTTP/1.0\r\nHost: test.com\r\nConnection: close\r\n\r\n"
+                local bytes, err = sock:send(req)
+                if not bytes then
+                    ngx.say("failed to send http request: ", err)
+                    return
+                end
+
+                ngx.say("sent http request: ", bytes, " bytes.")
+
+                while true do
+                    local line, err = sock:receive()
+                    if not line then
+                        break
+                    end
+
+                    ngx.say("received: ", line)
+                end
+
+                local ok, err = sock:close()
+                ngx.say("close: ", ok, " ", err)
+            end
+        }
+    }
+
+--- request
+GET /t
+--- response_body
+connected: 1
+ssl handshake: cdata
+sent http request: 56 bytes.
+received: HTTP/1.1 201 Created
+received: Server: openresty
+received: Content-Type: text/plain
+received: Content-Length: 4
+received: Connection: close
+received: 
+received: foo
+close: 1 nil
+
+--- error_log
+proxy protocol addr: 192.0.2.1
+proxy protocol port: 56324
+
+--- no_error_log
+[error]
+[alert]
+
+
+
+=== TEST 25: get proxy_protocol_addr without PROXY protocol
+--- http_config
+    lua_package_path "../lua-resty-core/lib/?.lua;;";
+
+    server {
+        listen 127.0.0.1:$TEST_NGINX_RAND_PORT_1 ssl;
+        server_name   test.com;
+
+        ssl_certificate_by_lua_block {
+            local ssl = require "ngx.ssl"
+            local addr, err = ssl.proxy_protocol_addr()
+            if addr then
+                print("proxy protocol addr: ", addr)
+            else
+                print("no proxy protocol data")
+            end
+            local port, err = ssl.proxy_protocol_port()
+            if port then
+                print("proxy protocol port: ", port)
+            else
+                print("no proxy protocol port")
+            end
+        }
+        ssl_certificate ../../cert/test.crt;
+        ssl_certificate_key ../../cert/test.key;
+
+        server_tokens off;
+        location /foo {
+            default_type 'text/plain';
+            content_by_lua_block { ngx.status = 201 ngx.say("foo") ngx.exit(201) }
+            more_clear_headers Date;
+        }
+    }
+
+--- config
+    server_tokens off;
+    lua_ssl_trusted_certificate ../../cert/test.crt;
+
+    location /t {
+        content_by_lua_block {
+            do
+                local sock = ngx.socket.tcp()
+
+                sock:settimeout(2000)
+
+                local ok, err = sock:connect("127.0.0.1", $TEST_NGINX_RAND_PORT_1)
+                if not ok then
+                    ngx.say("failed to connect: ", err)
+                    return
+                end
+
+                ngx.say("connected: ", ok)
+
+                local sess, err = sock:sslhandshake(nil, "test.com", true)
+                if not sess then
+                    ngx.say("failed to do SSL handshake: ", err)
+                    return
+                end
+
+                ngx.say("ssl handshake: ", type(sess))
+
+                local req = "GET /foo HTTP/1.0\r\nHost: test.com\r\nConnection: close\r\n\r\n"
+                local bytes, err = sock:send(req)
+                if not bytes then
+                    ngx.say("failed to send http request: ", err)
+                    return
+                end
+
+                ngx.say("sent http request: ", bytes, " bytes.")
+
+                while true do
+                    local line, err = sock:receive()
+                    if not line then
+                        break
+                    end
+
+                    ngx.say("received: ", line)
+                end
+
+                local ok, err = sock:close()
+                ngx.say("close: ", ok, " ", err)
+            end
+        }
+    }
+
+--- request
+GET /t
+--- response_body
+connected: 1
+ssl handshake: cdata
+sent http request: 56 bytes.
+received: HTTP/1.1 201 Created
+received: Server: nginx
+received: Content-Type: text/plain
+received: Content-Length: 4
+received: Connection: close
+received:
+received: foo
+close: 1 nil
+
+--- error_log
+no proxy protocol data
+no proxy protocol port
+
+--- no_error_log
+[error]
+[alert]
+
+
+
+=== TEST 26: ssl_certificate_by_lua* can yield when reading early data
 --- skip_openssl: 6: < 1.1.1
 --- http_config
     server {

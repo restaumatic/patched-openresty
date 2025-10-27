@@ -27,6 +27,8 @@ local ngx_lua_ffi_ssl_raw_server_addr
 local ngx_lua_ffi_ssl_server_port
 local ngx_lua_ffi_ssl_server_name
 local ngx_lua_ffi_ssl_raw_client_addr
+local ngx_lua_ffi_ssl_proxy_protocol_addr
+local ngx_lua_ffi_ssl_proxy_protocol_port
 local ngx_lua_ffi_cert_pem_to_der
 local ngx_lua_ffi_priv_key_pem_to_der
 local ngx_lua_ffi_ssl_get_tls1_version
@@ -66,6 +68,12 @@ if subsystem == 'http' then
 
     int ngx_http_lua_ffi_ssl_raw_client_addr(ngx_http_request_t *r, char **addr,
         size_t *addrlen, int *addrtype, char **err);
+
+    int ngx_http_lua_ffi_ssl_proxy_protocol_addr(ngx_http_request_t *r,
+        char **addr, size_t *addrlen, char **err);
+
+    int ngx_http_lua_ffi_ssl_proxy_protocol_port(ngx_http_request_t *r,
+        unsigned short *port, char **err);
 
     int ngx_http_lua_ffi_cert_pem_to_der(const unsigned char *pem,
         size_t pem_len, unsigned char *der, char **err);
@@ -125,6 +133,10 @@ if subsystem == 'http' then
     ngx_lua_ffi_ssl_server_port = C.ngx_http_lua_ffi_ssl_server_port
     ngx_lua_ffi_ssl_server_name = C.ngx_http_lua_ffi_ssl_server_name
     ngx_lua_ffi_ssl_raw_client_addr = C.ngx_http_lua_ffi_ssl_raw_client_addr
+    ngx_lua_ffi_ssl_proxy_protocol_addr =
+        C.ngx_http_lua_ffi_ssl_proxy_protocol_addr
+    ngx_lua_ffi_ssl_proxy_protocol_port =
+        C.ngx_http_lua_ffi_ssl_proxy_protocol_port
     ngx_lua_ffi_cert_pem_to_der = C.ngx_http_lua_ffi_cert_pem_to_der
     ngx_lua_ffi_priv_key_pem_to_der = C.ngx_http_lua_ffi_priv_key_pem_to_der
     ngx_lua_ffi_ssl_get_tls1_version = C.ngx_http_lua_ffi_ssl_get_tls1_version
@@ -364,6 +376,46 @@ function _M.raw_client_addr()
     end
 
     return nil, nil, ffi_str(errmsg[0])
+end
+
+
+function _M.proxy_protocol_addr()
+    local r = get_request()
+    if not r then
+        error("no request found")
+    end
+
+    local sizep = get_size_ptr()
+
+    local rc = ngx_lua_ffi_ssl_proxy_protocol_addr(r, charpp, sizep, errmsg)
+    if rc == FFI_OK then
+        return ffi_str(charpp[0], sizep[0])
+    end
+
+    if rc == FFI_DECLINED then
+        return nil
+    end
+
+    return nil, ffi_str(errmsg[0])
+end
+
+
+function _M.proxy_protocol_port()
+    local r = get_request()
+    if not r then
+        error("no request found")
+    end
+
+    local rc = ngx_lua_ffi_ssl_proxy_protocol_port(r, ushortp, errmsg)
+    if rc == FFI_OK then
+        return ushortp[0]
+    end
+
+    if rc == FFI_DECLINED then
+        return nil
+    end
+
+    return nil, ffi_str(errmsg[0])
 end
 
 
