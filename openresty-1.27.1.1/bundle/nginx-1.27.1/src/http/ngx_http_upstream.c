@@ -8,6 +8,7 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
+#include <ngx_metrics.h>
 
 
 #if (NGX_HTTP_CACHE)
@@ -1300,10 +1301,10 @@ ngx_http_upstream_handler(ngx_event_t *ev)
     }
 
     if (ev->write) {
-        u->write_event_handler(r, u);
+        NGX_CALL_HANDLER(u->write_event_handler, r, u);
 
     } else {
-        u->read_event_handler(r, u);
+        NGX_CALL_HANDLER(u->read_event_handler, r, u);
     }
 
     ngx_http_run_posted_requests(c);
@@ -4016,10 +4017,10 @@ ngx_http_upstream_thread_event_handler(ngx_event_t *ev)
          * for sendfile() in threads), or if the request was terminated
          */
 
-        c->write->handler(c->write);
+        NGX_CALL_HANDLER(c->write->handler, c->write);
 
     } else {
-        r->write_event_handler(r);
+        NGX_CALL_HANDLER(r->write_event_handler, r);
         ngx_http_run_posted_requests(c);
     }
 }

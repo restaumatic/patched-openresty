@@ -8,6 +8,7 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
+#include <ngx_metrics.h>
 
 
 static void ngx_http_wait_request_handler(ngx_event_t *ev);
@@ -2429,10 +2430,10 @@ ngx_http_request_handler(ngx_event_t *ev)
     }
 
     if (ev->write) {
-        r->write_event_handler(r);
+        NGX_CALL_HANDLER(r->write_event_handler, r);
 
     } else {
-        r->read_event_handler(r);
+        NGX_CALL_HANDLER(r->read_event_handler, r);
     }
 
     ngx_http_run_posted_requests(c);
@@ -2467,7 +2468,7 @@ ngx_http_run_posted_requests(ngx_connection_t *c)
         ngx_log_debug2(NGX_LOG_DEBUG_HTTP, c->log, 0,
                        "http posted request: \"%V?%V\"", &r->uri, &r->args);
 
-        r->write_event_handler(r);
+        NGX_CALL_HANDLER(r->write_event_handler, r);
     }
 }
 
