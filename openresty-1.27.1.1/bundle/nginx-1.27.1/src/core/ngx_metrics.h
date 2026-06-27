@@ -28,8 +28,17 @@ extern ngx_metric_t ngx_metric_event_loop_latency_ns;
 // Report a measurement for a given metric.
 void ngx_metric_report(ngx_metric_t *metric, int64_t value);
 
-// Report an event handler timing measurement.
-void ngx_metrics_report_event_handler_time(void *handler, int64_t value);
+#define NGX_CALL_HANDLER(handler, ...) do { ngx_span_t __span; ngx_metrics_span_enter(&__span, handler); (handler)(__VA_ARGS__); ngx_metrics_span_exit(&__span); } while(0)
+
+typedef struct ngx_span_s {
+  struct ngx_span_s *parent;
+  void *handler;
+  int64_t start_time;
+  int64_t children_time;
+} ngx_span_t;
+
+void ngx_metrics_span_enter(ngx_span_t *span, void *handler);
+void ngx_metrics_span_exit(ngx_span_t *span);
 
 int64_t ngx_precise_time();
 

@@ -298,9 +298,7 @@ ngx_process_events_and_timers(ngx_cycle_t *cycle)
 
         ngx_delete_posted_event(ev);
 
-        int64_t start = ngx_precise_time();
-        ev->handler(ev);
-        ngx_metrics_report_event_handler_time(ev->handler, ngx_precise_time() - start);
+        NGX_CALL_HANDLER(ev->handler, ev);
     }
 }
 

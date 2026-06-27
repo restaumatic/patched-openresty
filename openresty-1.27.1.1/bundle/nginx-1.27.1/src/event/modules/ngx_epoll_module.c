@@ -905,9 +905,7 @@ ngx_epoll_process_events(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags)
                 ngx_post_event(rev, queue);
 
             } else {
-              int64_t start = ngx_precise_time();
-              rev->handler(rev);
-              ngx_metrics_report_event_handler_time(rev->handler, ngx_precise_time() - start);
+                NGX_CALL_HANDLER(rev->handler, rev);
             }
         }
 
@@ -936,9 +934,7 @@ ngx_epoll_process_events(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags)
                 ngx_post_event(wev, &ngx_posted_events);
 
             } else {
-              int64_t start = ngx_precise_time();
-              wev->handler(wev);
-              ngx_metrics_report_event_handler_time(wev->handler, ngx_precise_time() - start);
+                NGX_CALL_HANDLER(wev->handler, wev);
             }
         }
     }

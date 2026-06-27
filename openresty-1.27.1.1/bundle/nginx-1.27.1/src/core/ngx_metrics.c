@@ -13,20 +13,33 @@
 #include <stdlib.h>
 
 #define METRIC_INIT(name) { name, NULL, 0, 0, 0, 0 }
-#define MAX_DYNAMIC_METRICS 128
 
 static char *read_file_contents(ngx_log_t *log, const char *filename);
+
+#define NUM_SPAN_METRIC_TYPES 2
+
+typedef enum {
+    SPAN_METRIC_TOTAL_WALL_TIME = 0,
+    SPAN_METRIC_SELF_WALL_TIME
+} span_metric_type_e;
+
+#define MAX_DYNAMIC_METRICS (128 * NUM_SPAN_METRIC_TYPES)
+
+static const char *METRIC_TYPE_NAMES[] = {
+  "event_handler_total_wall_time_ns",
+  "event_handler_self_wall_time_ns",
+};
 
 typedef struct {
   const char *name;
   /** Address relative to the base address of the executable */
   uintptr_t address;
-  ngx_metric_t *metric;
+  ngx_metric_t *metrics[NUM_SPAN_METRIC_TYPES];
 } symbol;
 
 symbol *find_symbol(uintptr_t addr);
 
-ngx_metric_t *get_metric_for_symbol(symbol *sym);
+ngx_metric_t *get_metric_for_symbol(symbol *sym, span_metric_type_e metric_type);
 
 // Summary metric for all event handlers.
 // There's another metric - event_handler_time_ns - tagged by the handler name.
@@ -48,8 +61,7 @@ static int num_dynamic_metrics = 0;
 
 void *get_base_address();
 
-void
-ngx_metrics_report_event_handler_time(void *handler, int64_t value) {
+static void ngx_metrics_report_event_handler_time(void *handler, span_metric_type_e metric_type, int64_t value) {
   ngx_metric_report(&ngx_metric_any_event_handler_time_ns, value);
 
   uintptr_t relative_addr = (uintptr_t) handler - (uintptr_t) get_base_address();
@@ -58,7 +70,7 @@ ngx_metrics_report_event_handler_time(void *handler, int64_t value) {
   /*     relative_addr, */
   /*     sym ? sym->name : "unknown", */
   /*     value / 1000000); */
-  ngx_metric_t *metric = sym ? get_metric_for_symbol(sym) : NULL;
+  ngx_metric_t *metric = sym ? get_metric_for_symbol(sym, metric_type) : NULL;
   if(metric) {
     /* fprintf(stderr, "tags: %d %s %d %p\n", getpid(), metric->tags, num_dynamic_metrics, metric->tags); */
     ngx_metric_report(metric, value);
@@ -88,7 +100,7 @@ int ngx_get_num_metrics() {
 }
 
 ngx_metric_t *ngx_get_metric(int index) {
-  return index < NUM_BUILTIN_METRICS ? builtin_metrics[index] : &dynamic_metrics[index - NUM_BUILTIN_METRICS];
+  return (size_t)index < NUM_BUILTIN_METRICS ? builtin_metrics[index] : &dynamic_metrics[index - NUM_BUILTIN_METRICS];
 }
 
 void ngx_metrics_reset() {
@@ -109,7 +121,7 @@ static void *exe_base_address = 0;
 
 static int callback(struct dl_phdr_info *info, size_t size, void *data) {
     if (info->dlpi_name[0] == '\0') { // The main executable has an empty name
-        exe_base_address = info->dlpi_addr;
+        exe_base_address = (void *) info->dlpi_addr;
     }
     return 0;
 }
@@ -128,6 +140,8 @@ int num_symbols = 0;
 
 #define MAX_EXE_FILENAME 256
 #define SUFFIX ".symbols"
+
+int count_lines(const char *contents);
 
 bool ngx_metrics_init_symbols(ngx_log_t *log) {
   char filename[MAX_EXE_FILENAME + sizeof(SUFFIX)];
@@ -163,7 +177,7 @@ bool ngx_metrics_init_symbols(ngx_log_t *log) {
     }
     new_symbols[i].name = strdup(name);
     new_symbols[i].address = (uintptr_t) address;
-    new_symbols[i].metric = NULL;
+    memset(new_symbols[i].metrics, 0, sizeof(new_symbols[i].metrics));
     p = strchr(p, '\n') + 1;
   }
 
@@ -248,10 +262,10 @@ symbol *find_symbol(uintptr_t addr) {
   return bsearch(&fake_symbol, symbols, num_symbols, sizeof(symbol), compare_symbols);
 }
 
-ngx_metric_t *get_metric_for_symbol(symbol *sym) {
-  if(sym->metric) {
+ngx_metric_t *get_metric_for_symbol(symbol *sym, span_metric_type_e metric_type) {
+  if(sym->metrics[metric_type]) {
     /* fprintf(stderr, "symbol %s has metric\n", sym->name); */
-    return sym->metric;
+    return sym->metrics[metric_type];
   }
   if(num_dynamic_metrics == MAX_DYNAMIC_METRICS) {
     return NULL;
@@ -262,7 +276,7 @@ ngx_metric_t *get_metric_for_symbol(symbol *sym) {
   char tags[256];
   snprintf(tags, sizeof(tags), "{handler=\"%s\"}", sym->name);
 
-  metric->name = "event_handler_time_ns";
+  metric->name = METRIC_TYPE_NAMES[metric_type];
   metric->tags = strdup(tags);
 
   metric->count = 0;
@@ -270,6 +284,28 @@ ngx_metric_t *get_metric_for_symbol(symbol *sym) {
   metric->min = 0;
   metric->max = 0;
 
-  sym->metric = metric;
+  sym->metrics[metric_type] = metric;
   return metric;
+}
+
+static ngx_span_t *current_span = NULL;
+
+void ngx_metrics_span_enter(ngx_span_t *span, void *handler) {
+  span->parent = current_span;
+  span->handler = handler;
+  span->start_time = ngx_precise_time();
+  span->children_time = 0;
+  current_span = span;
+}
+
+void ngx_metrics_span_exit(ngx_span_t *span) {
+  int64_t total_time = ngx_precise_time() - span->start_time;
+  int64_t self_time = total_time - span->children_time;
+  ngx_metrics_report_event_handler_time(span->handler, SPAN_METRIC_TOTAL_WALL_TIME, total_time);
+  ngx_metrics_report_event_handler_time(span->handler, SPAN_METRIC_SELF_WALL_TIME, self_time);
+
+  if(span->parent) {
+    span->parent->children_time += total_time;
+  }
+  current_span = span->parent;
 }
