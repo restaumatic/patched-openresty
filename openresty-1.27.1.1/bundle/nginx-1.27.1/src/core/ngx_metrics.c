@@ -16,11 +16,13 @@
 
 static char *read_file_contents(ngx_log_t *log, const char *filename);
 
-#define NUM_SPAN_METRIC_TYPES 2
+#define NUM_SPAN_METRIC_TYPES 4
 
 typedef enum {
     SPAN_METRIC_TOTAL_WALL_TIME = 0,
-    SPAN_METRIC_SELF_WALL_TIME
+    SPAN_METRIC_SELF_WALL_TIME,
+    SPAN_METRIC_TOTAL_CPU_TIME,
+    SPAN_METRIC_SELF_CPU_TIME,
 } span_metric_type_e;
 
 #define MAX_DYNAMIC_METRICS (128 * NUM_SPAN_METRIC_TYPES)
@@ -28,6 +30,8 @@ typedef enum {
 static const char *METRIC_TYPE_NAMES[] = {
   "event_handler_total_wall_time_ns",
   "event_handler_self_wall_time_ns",
+  "event_handler_total_cpu_time_ns",
+  "event_handler_self_cpu_time_ns",
 };
 
 typedef struct {
@@ -114,6 +118,12 @@ void ngx_metrics_reset() {
 int64_t ngx_precise_time() {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
+  return ts.tv_sec * 1000000000L + ts.tv_nsec;
+}
+
+int64_t ngx_cpu_time() {
+  struct timespec ts;
+  clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
   return ts.tv_sec * 1000000000L + ts.tv_nsec;
 }
 
@@ -293,19 +303,25 @@ static ngx_span_t *current_span = NULL;
 void ngx_metrics_span_enter(ngx_span_t *span, void *handler) {
   span->parent = current_span;
   span->handler = handler;
-  span->start_time = ngx_precise_time();
-  span->children_time = 0;
+  span->start_wall_time = ngx_precise_time();
+  span->children_wall_time = 0;
+  span->start_cpu_time = ngx_cpu_time();
+  span->children_cpu_time = 0;
   current_span = span;
 }
 
 void ngx_metrics_span_exit(ngx_span_t *span) {
-  int64_t total_time = ngx_precise_time() - span->start_time;
-  int64_t self_time = total_time - span->children_time;
-  ngx_metrics_report_event_handler_time(span->handler, SPAN_METRIC_TOTAL_WALL_TIME, total_time);
-  ngx_metrics_report_event_handler_time(span->handler, SPAN_METRIC_SELF_WALL_TIME, self_time);
+  int64_t total_wall_time = ngx_precise_time() - span->start_wall_time;
+  ngx_metrics_report_event_handler_time(span->handler, SPAN_METRIC_TOTAL_WALL_TIME, total_wall_time);
+  ngx_metrics_report_event_handler_time(span->handler, SPAN_METRIC_SELF_WALL_TIME, total_wall_time - span->children_wall_time);
+
+  int64_t total_cpu_time = ngx_cpu_time() - span->start_cpu_time;
+  ngx_metrics_report_event_handler_time(span->handler, SPAN_METRIC_TOTAL_CPU_TIME, total_cpu_time);
+  ngx_metrics_report_event_handler_time(span->handler, SPAN_METRIC_SELF_CPU_TIME, total_cpu_time - span->children_cpu_time);
 
   if(span->parent) {
-    span->parent->children_time += total_time;
+    span->parent->children_wall_time += total_wall_time;
+    span->parent->children_cpu_time += total_cpu_time;
   }
   current_span = span->parent;
 }

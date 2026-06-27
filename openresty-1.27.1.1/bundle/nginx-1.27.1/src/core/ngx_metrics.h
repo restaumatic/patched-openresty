@@ -33,8 +33,10 @@ void ngx_metric_report(ngx_metric_t *metric, int64_t value);
 typedef struct ngx_span_s {
   struct ngx_span_s *parent;
   void *handler;
-  int64_t start_time;
-  int64_t children_time;
+  int64_t start_wall_time;
+  int64_t children_wall_time;
+  int64_t start_cpu_time;
+  int64_t children_cpu_time;
 } ngx_span_t;
 
 void ngx_metrics_span_enter(ngx_span_t *span, void *handler);
