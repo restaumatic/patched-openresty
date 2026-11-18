@@ -160,9 +160,12 @@ bool ngx_metrics_init_symbols(ngx_log_t *log) {
     ngx_log_error(NGX_LOG_ERR, log, 0, "ngx_metrics: Failed to read /proc/self/exe");
     return false;
   }
-  strcpy(filename + strlen(filename), SUFFIX);
+  strcpy(filename + len, SUFFIX);
 
   char *contents = read_file_contents(log, filename);
+  if(!contents) {
+    return false;
+  }
 
   int new_num_symbols = count_lines(contents);
 
@@ -210,6 +213,10 @@ void ngx_metrics_init(ngx_log_t *log) {
 // It is the caller's responsibility to free the buffer.
 char *read_file_contents(ngx_log_t *log, const char *filename) {
   FILE *f = fopen(filename, "r");
+  if(!f) {
+    ngx_log_error(NGX_LOG_ERR, log, ngx_errno, "ngx_metrics: Failed to open symbols file %s", filename);
+    return NULL;
+  }
 
   // get file size
   if(fseek(f, 0, SEEK_END)) {
@@ -221,7 +228,7 @@ char *read_file_contents(ngx_log_t *log, const char *filename) {
   rewind(f);
 
   // allocate a buffer and read the whole contents
-  char *buffer = malloc(size);
+  char *buffer = malloc(size + 1);
   if(!buffer) {
     ngx_log_error(NGX_LOG_ERR, log, 0, "ngx_metrics: Failed to allocate buffer for symbols");
     fclose(f);
@@ -230,14 +237,14 @@ char *read_file_contents(ngx_log_t *log, const char *filename) {
   size_t read = fread(buffer, size, 1, f);
   if(read != 1) {
     ngx_log_error(NGX_LOG_ERR, log, 0,
-        "ngx_metrics: Failed to read symbols file (%d bytes read out of %d)",
-        read, size);
+        "ngx_metrics: Failed to read symbols file of %uz bytes", size);
     fclose(f);
     free(buffer);
     return NULL;
   }
 
   fclose(f);
+  buffer[size] = '\0';
   return buffer;
 }
 
