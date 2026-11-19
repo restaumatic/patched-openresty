@@ -13,6 +13,18 @@ typedef struct {
   int64_t max;
 } ngx_metric_t;
 
+#define NGX_METRICS_NUM_SPAN_METRIC_TYPES 4
+
+typedef struct {
+  const char *name;
+  ngx_metric_t *metrics[NGX_METRICS_NUM_SPAN_METRIC_TYPES];
+} ngx_metrics_symbol_t;
+
+// Returns the number of symbols loaded, or -1 with a message written to err.
+int ngx_metrics_load_symbols(char *err, int errlen);
+// Address is relative to the executable's base address.
+ngx_metrics_symbol_t *ngx_metrics_find_symbol(uintptr_t relative_addr);
+
 struct ngx_log_s;
 typedef struct ngx_log_s             ngx_log_t;
 

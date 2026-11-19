@@ -17,6 +17,8 @@ fn main() {
         .clang_arg("-I../build/nginx-1.27.1/src/os/unix")
         .clang_arg("-I../build/nginx-1.27.1/objs")
         .blocklist_function("ngx_metrics_dump_lua_stack")
+        .blocklist_function("ngx_metrics_load_symbols")
+        .blocklist_function("ngx_metrics_find_symbol")
         // Tell cargo to invalidate the built crate whenever any of the
         // included header files changed.
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
