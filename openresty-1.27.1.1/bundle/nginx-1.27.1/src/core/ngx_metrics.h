@@ -13,18 +13,6 @@ typedef struct {
   int64_t max;
 } ngx_metric_t;
 
-#define NGX_METRICS_NUM_SPAN_METRIC_TYPES 4
-
-typedef struct {
-  const char *name;
-  ngx_metric_t *metrics[NGX_METRICS_NUM_SPAN_METRIC_TYPES];
-} ngx_metrics_symbol_t;
-
-// Returns the number of symbols loaded, or -1 with a message written to err.
-int ngx_metrics_load_symbols(char *err, int errlen);
-// Address is relative to the executable's base address.
-ngx_metrics_symbol_t *ngx_metrics_find_symbol(uintptr_t relative_addr);
-
 struct ngx_log_s;
 typedef struct ngx_log_s             ngx_log_t;
 
@@ -40,19 +28,10 @@ extern ngx_metric_t ngx_metric_event_loop_latency_ns;
 // Report a measurement for a given metric.
 void ngx_metric_report(ngx_metric_t *metric, int64_t value);
 
-#define NGX_CALL_HANDLER(handler, ...) do { ngx_span_t __span; ngx_metrics_span_enter(&__span, handler); (handler)(__VA_ARGS__); ngx_metrics_span_exit(&__span); } while(0)
+#define NGX_CALL_HANDLER(handler, ...) do { ngx_metrics_span_enter(handler); (handler)(__VA_ARGS__); ngx_metrics_span_exit(); } while(0)
 
-typedef struct ngx_span_s {
-  struct ngx_span_s *parent;
-  void *handler;
-  int64_t start_wall_time;
-  int64_t children_wall_time;
-  int64_t start_cpu_time;
-  int64_t children_cpu_time;
-} ngx_span_t;
-
-void ngx_metrics_span_enter(ngx_span_t *span, void *handler);
-void ngx_metrics_span_exit(ngx_span_t *span);
+void ngx_metrics_span_enter(void *handler);
+void ngx_metrics_span_exit(void);
 
 int64_t ngx_precise_time();
 
