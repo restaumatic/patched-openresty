@@ -15,10 +15,15 @@ typedef enum {
 } ngx_metric_e;
 
 // Report a measurement for a given metric.
+//
+// Ignored off the main thread and before ngx_metrics_init.
 void ngx_metric_report(ngx_metric_e metric, int64_t value);
 
 // Returns all metrics in the Prometheus text format, to be freed with ngx_metrics_free_result.
-// With `reset`, zeroes them afterwards. NULL off the main thread and before ngx_metrics_init.
+// With `reset`, zeroes them afterwards.
+//
+// NULL off the main thread and before ngx_metrics_init.
+//
 // From a Lua handler:
 //   local ffi = require "ffi"
 //   ffi.cdef[[
@@ -28,6 +33,7 @@ void ngx_metric_report(ngx_metric_e metric, int64_t value);
 //   local metrics = ffi.C.ngx_metrics_prometheus(1)
 //   if metrics == nil then return ngx.exit(ngx.HTTP_SERVICE_UNAVAILABLE) end
 //   ngx.print(ffi.string(ffi.gc(metrics, ffi.C.ngx_metrics_free_result)))
+//
 // TODO: serve metrics without Lua, from an nginx directive (e.g. with the ngx crate).
 char *ngx_metrics_prometheus(int reset);
 void ngx_metrics_free_result(char *metrics);
@@ -36,7 +42,9 @@ void ngx_metrics_free_result(char *metrics);
 #define NGX_CALL_HANDLER(handler, ...) do { ngx_metrics_span_enter(handler); (handler)(__VA_ARGS__); ngx_metrics_span_exit(); } while(0)
 
 // Opens a span for `handler`: its wall and CPU time and call count are tracked until the matching
-// ngx_metrics_span_exit. Spans nest. Ignored off the main thread and before ngx_metrics_init.
+// ngx_metrics_span_exit. Spans nest.
+//
+// Ignored off the main thread and before ngx_metrics_init.
 void ngx_metrics_span_enter(void *handler);
 // Closes the innermost open span.
 void ngx_metrics_span_exit(void);
