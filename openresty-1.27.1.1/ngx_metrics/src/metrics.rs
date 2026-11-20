@@ -26,7 +26,7 @@ const SPAN_METRIC_NAMES: [&str; 4] = [
 #[derive(Default)]
 struct Metric {
     name: &'static str,
-    tags: String,
+    handler: Option<String>,
     count: i64,
     sum: i64,
     min: i64,
@@ -50,12 +50,16 @@ impl Metric {
     fn write_prometheus(&self, out: &mut String) {
         let Metric {
             name,
-            tags,
+            handler,
             count,
             sum,
             min,
             max,
         } = self;
+        let tags = handler
+            .as_ref()
+            .map(|h| format!("{{handler=\"{h}\"}}"))
+            .unwrap_or_default();
         let (avg, min, max) = match count {
             0 => (0.0, 0, 0),
             _ => (*sum as f64 / *count as f64, *min, *max),
@@ -69,7 +73,7 @@ impl Metric {
 }
 
 struct Handler {
-    tags: String,
+    name: String,
     metrics: Option<[usize; 4]>,
 }
 
@@ -115,7 +119,7 @@ impl State {
                 (
                     addr,
                     Handler {
-                        tags: format!("{{handler=\"{name}\"}}"),
+                        name,
                         metrics: None,
                     },
                 )
@@ -180,7 +184,7 @@ impl State {
             let ids = SPAN_METRIC_NAMES.map(|name| {
                 self.metrics.push(Metric {
                     name,
-                    tags: handler.tags.clone(),
+                    handler: Some(handler.name.clone()),
                     ..Default::default()
                 });
                 self.metrics.len() - 1
@@ -199,7 +203,7 @@ impl State {
             if reset {
                 *m = Metric {
                     name: m.name,
-                    tags: std::mem::take(&mut m.tags),
+                    handler: m.handler.take(),
                     ..Default::default()
                 };
             }
@@ -294,7 +298,7 @@ mod tests {
         s.exit_span();
         s.exit_span();
         assert_eq!(s.metrics.len(), 3 + 8);
-        assert_eq!(s.metrics[3].tags, "{handler=\"inner\"}");
+        assert_eq!(s.metrics[3].handler.as_deref(), Some("inner"));
         let [inner_total, _, _, _] = [3, 4, 5, 6].map(|i| s.metrics[i].sum);
         let [outer_total, outer_self, _, _] = [7, 8, 9, 10].map(|i| s.metrics[i].sum);
         assert_eq!(outer_self, outer_total - inner_total);
