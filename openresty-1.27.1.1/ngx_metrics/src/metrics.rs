@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use crate::ffi::{cpu_time_ns, wall_time_ns};
+use crate::ffi::{cpu_time_ns, ngx_metric_e_NGX_METRIC_ANY_EVENT_HANDLER_TIME_NS, wall_time_ns};
 
 /// In the order of `ngx_metric_e`.
 pub const BUILTIN_NAMES: [&str; 3] = [
@@ -12,7 +12,7 @@ pub const BUILTIN_NAMES: [&str; 3] = [
     "open_and_stat_file_time_ns",
     "event_loop_latency_ns",
 ];
-const ANY_EVENT_HANDLER_TIME_NS: usize = 0;
+const ANY_EVENT_HANDLER_TIME_NS: usize = ngx_metric_e_NGX_METRIC_ANY_EVENT_HANDLER_TIME_NS as usize;
 
 const MAX_DYNAMIC_METRICS: usize = 128 * 4;
 
