@@ -7,8 +7,11 @@ use std::fmt::Write;
 use crate::ffi::{cpu_time_ns, wall_time_ns};
 
 /// In the order of `ngx_metric_e`.
-pub const BUILTIN_NAMES: [&str; 3] =
-    ["any_event_handler_time_ns", "open_and_stat_file_time_ns", "event_loop_latency_ns"];
+pub const BUILTIN_NAMES: [&str; 3] = [
+    "any_event_handler_time_ns",
+    "open_and_stat_file_time_ns",
+    "event_loop_latency_ns",
+];
 const ANY_EVENT_HANDLER_TIME_NS: usize = 0;
 
 const MAX_DYNAMIC_METRICS: usize = 128 * 4;
@@ -45,7 +48,14 @@ impl Metric {
 
     #[allow(clippy::cast_precision_loss)]
     fn write_prometheus(&self, out: &mut String) {
-        let Metric { name, tags, count, sum, min, max } = self;
+        let Metric {
+            name,
+            tags,
+            count,
+            sum,
+            min,
+            max,
+        } = self;
         let (avg, min, max) = match count {
             0 => (0.0, 0, 0),
             _ => (*sum as f64 / *count as f64, *min, *max),
@@ -101,11 +111,27 @@ impl State {
         let handlers = symbols
             .into_iter()
             .filter(|(_, name)| !name.contains('\0'))
-            .map(|(addr, name)| (addr, Handler { tags: format!("{{handler=\"{name}\"}}"), metrics: None }))
+            .map(|(addr, name)| {
+                (
+                    addr,
+                    Handler {
+                        tags: format!("{{handler=\"{name}\"}}"),
+                        metrics: None,
+                    },
+                )
+            })
             .collect();
         let mut metrics = Vec::with_capacity(BUILTIN_NAMES.len() + MAX_DYNAMIC_METRICS);
-        metrics.extend(BUILTIN_NAMES.map(|name| Metric { name, ..Default::default() }));
-        State { base_address, handlers, metrics, spans: Vec::new() }
+        metrics.extend(BUILTIN_NAMES.map(|name| Metric {
+            name,
+            ..Default::default()
+        }));
+        State {
+            base_address,
+            handlers,
+            metrics,
+            spans: Vec::new(),
+        }
     }
 
     fn enter_span(&mut self, handler: usize) {
@@ -128,12 +154,22 @@ impl State {
         }
         self.metrics[ANY_EVENT_HANDLER_TIME_NS].report(wall);
         if let Some(relative_addr) = span.handler.checked_sub(self.base_address) {
-            self.report_handler(relative_addr, [wall, wall - span.children_wall, cpu, cpu - span.children_cpu]);
+            self.report_handler(
+                relative_addr,
+                [
+                    wall,
+                    wall - span.children_wall,
+                    cpu,
+                    cpu - span.children_cpu,
+                ],
+            );
         }
     }
 
     fn report_handler(&mut self, relative_addr: usize, values: [i64; 4]) {
-        let Some(handler) = self.handlers.get_mut(&relative_addr) else { return };
+        let Some(handler) = self.handlers.get_mut(&relative_addr) else {
+            return;
+        };
         let ids = if let Some(ids) = handler.metrics {
             ids
         } else {
@@ -142,7 +178,11 @@ impl State {
                 return;
             }
             let ids = SPAN_METRIC_NAMES.map(|name| {
-                self.metrics.push(Metric { name, tags: handler.tags.clone(), ..Default::default() });
+                self.metrics.push(Metric {
+                    name,
+                    tags: handler.tags.clone(),
+                    ..Default::default()
+                });
                 self.metrics.len() - 1
             });
             *handler.metrics.insert(ids)
@@ -157,7 +197,11 @@ impl State {
         for m in &mut self.metrics {
             m.write_prometheus(&mut out);
             if reset {
-                *m = Metric { name: m.name, tags: std::mem::take(&mut m.tags), ..Default::default() };
+                *m = Metric {
+                    name: m.name,
+                    tags: std::mem::take(&mut m.tags),
+                    ..Default::default()
+                };
             }
         }
         out
@@ -201,26 +245,45 @@ mod tests {
     use super::*;
 
     fn test_state(symbols: &[(usize, &str)]) -> State {
-        State::new(0x1000, symbols.iter().map(|&(addr, name)| (addr, name.to_string())).collect())
+        State::new(
+            0x1000,
+            symbols
+                .iter()
+                .map(|&(addr, name)| (addr, name.to_string()))
+                .collect(),
+        )
     }
 
     #[test]
     fn reentry_and_other_threads_are_ignored() {
         STATE.set(Some(test_state(&[])));
         assert_eq!(with_state(|_| with_state(|_| ())), Some(None));
-        assert_eq!(std::thread::spawn(|| with_state(|_| ())).join().unwrap(), None);
+        assert_eq!(
+            std::thread::spawn(|| with_state(|_| ())).join().unwrap(),
+            None
+        );
         assert_eq!(with_state(|_| ()), Some(()));
     }
 
     #[test]
     fn handlers_beyond_capacity_get_no_metrics() {
-        let names: Vec<_> = (0..=MAX_DYNAMIC_METRICS / 4).map(|i| (i, format!("h{i}"))).collect();
-        let mut s = test_state(&names.iter().map(|(a, n)| (*a, n.as_str())).collect::<Vec<_>>());
+        let names: Vec<_> = (0..=MAX_DYNAMIC_METRICS / 4)
+            .map(|i| (i, format!("h{i}")))
+            .collect();
+        let mut s = test_state(
+            &names
+                .iter()
+                .map(|(a, n)| (*a, n.as_str()))
+                .collect::<Vec<_>>(),
+        );
         for (addr, _) in &names {
             s.report_handler(*addr, [1; 4]);
         }
         assert_eq!(s.metrics.len(), BUILTIN_NAMES.len() + MAX_DYNAMIC_METRICS);
-        assert_eq!(s.handlers.values().filter(|h| h.metrics.is_none()).count(), 1);
+        assert_eq!(
+            s.handlers.values().filter(|h| h.metrics.is_none()).count(),
+            1
+        );
     }
 
     #[test]
@@ -258,6 +321,8 @@ mod tests {
         assert!(out.contains("event_handler_self_cpu_time_ns_max{handler=\"h\"} 3\n"));
         assert_eq!(out.lines().count(), (3 + 4) * 5);
         assert!(s.metrics.iter().all(|m| m.count == 0 && m.sum == 0));
-        assert!(s.prometheus(false).contains("event_handler_self_cpu_time_ns_count{handler=\"h\"} 0\n"));
+        assert!(s
+            .prometheus(false)
+            .contains("event_handler_self_cpu_time_ns_count{handler=\"h\"} 0\n"));
     }
 }

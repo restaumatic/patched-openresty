@@ -3,7 +3,14 @@ use std::io::Write;
 
 use crate::{lua, metrics, symbols};
 
-#[allow(non_upper_case_globals, non_camel_case_types, non_snake_case, dead_code, clippy::all, clippy::pedantic)]
+#[allow(
+    non_upper_case_globals,
+    non_camel_case_types,
+    non_snake_case,
+    dead_code,
+    clippy::all,
+    clippy::pedantic
+)]
 mod bindings {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
@@ -104,7 +111,10 @@ pub fn cpu_time_ns() -> i64 {
 }
 
 fn clock_ns(clock: libc::clockid_t) -> i64 {
-    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
     // SAFETY: `ts` is a valid out-pointer.
     unsafe { libc::clock_gettime(clock, &mut ts) };
     ts.tv_sec * 1_000_000_000 + ts.tv_nsec
@@ -142,5 +152,13 @@ const NGX_LOG_ERR: usize = 4;
 unsafe fn log_error(log: *mut ngx_log_t, msg: &str) {
     let msg = CString::new(msg).unwrap_or_default();
     // SAFETY: `log` is an nginx log (this function's contract); `%s` takes a NUL-terminated string.
-    unsafe { ngx_log_error_core(NGX_LOG_ERR, log, 0, c"ngx_metrics: %s".as_ptr(), msg.as_ptr()) };
+    unsafe {
+        ngx_log_error_core(
+            NGX_LOG_ERR,
+            log,
+            0,
+            c"ngx_metrics: %s".as_ptr(),
+            msg.as_ptr(),
+        );
+    }
 }

@@ -40,7 +40,8 @@ mod tests {
     #[test]
     fn parses_nm_output() {
         let symbols =
-            parse("0000000000049393 t ngx_cleanup_environment_variable\n00000000000a0000 T main\n").unwrap();
+            parse("0000000000049393 t ngx_cleanup_environment_variable\n00000000000a0000 T main\n")
+                .unwrap();
         assert_eq!(symbols.len(), 2);
         assert_eq!(symbols[&0x49393], "ngx_cleanup_environment_variable");
         assert_eq!(symbols[&0xa0000], "main");
