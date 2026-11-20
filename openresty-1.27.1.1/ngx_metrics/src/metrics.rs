@@ -126,10 +126,9 @@ impl State {
             parent.children_cpu += cpu;
         }
         self.metrics[ANY_EVENT_HANDLER_TIME_NS].report(wall);
-        self.report_handler(
-            span.handler.wrapping_sub(self.base_address),
-            [wall, wall - span.children_wall, cpu, cpu - span.children_cpu],
-        );
+        if let Some(relative_addr) = span.handler.checked_sub(self.base_address) {
+            self.report_handler(relative_addr, [wall, wall - span.children_wall, cpu, cpu - span.children_cpu]);
+        }
     }
 
     fn report_handler(&mut self, relative_addr: usize, values: [i64; 4]) {

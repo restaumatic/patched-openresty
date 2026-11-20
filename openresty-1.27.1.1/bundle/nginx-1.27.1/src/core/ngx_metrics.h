@@ -26,13 +26,10 @@ void ngx_metrics_free(char *metrics);
 // Calls `handler(...)` inside a span: see ngx_metrics_span_enter.
 #define NGX_CALL_HANDLER(handler, ...) do { ngx_metrics_span_enter(handler); (handler)(__VA_ARGS__); ngx_metrics_span_exit(); } while(0)
 
-// Opens a span for the function at `handler`. Spans nest; each enter needs a matching exit.
-// On exit, the span's total wall time goes to NGX_METRIC_ANY_EVENT_HANDLER_TIME_NS. If `handler`
-// is in the symbols file, its total and self (minus nested spans) wall and CPU times also go to the
-// event_handler_* metrics tagged `{handler="<name>"}`.
-// Ignored off the main thread and before ngx_metrics_init.
+// Opens a span for `handler`: its wall and CPU time and call count are tracked until the matching
+// ngx_metrics_span_exit. Spans nest. Ignored off the main thread and before ngx_metrics_init.
 void ngx_metrics_span_enter(void *handler);
-// Closes the innermost open span; does nothing if none is open.
+// Closes the innermost open span.
 void ngx_metrics_span_exit(void);
 
 int64_t ngx_precise_time();

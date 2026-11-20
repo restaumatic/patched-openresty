@@ -11,7 +11,8 @@ Added a metrics system.
 
 The included metrics are:
 
-- `event_handler_time_ns`: Time spent in event handlers in the event loop
+- `any_event_handler_time_ns`: Time spent in each event handler call in the event loop
+- `event_handler_{total,self}_{wall,cpu}_time_ns{handler="<name>"}`: The same per handler, for handlers listed in `<nginx>.symbols` (from `generate-symbols`). Self time excludes nested handler calls.
 - `open_and_stat_file_time_ns`: Time spent in `ngx_open_and_stat_file` function
 - `event_loop_latency_ns`: Event loop iteration time (from `epoll_wait` return to next call to `epoll_wait`)
 
