@@ -2,7 +2,7 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
-use std::cell::{Cell, UnsafeCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::io::Write;
@@ -30,7 +30,7 @@ pub extern "C" fn ngx_metrics_dump_lua_stack(
             }
             _ => {
                 // TODO: use ngx_log_error
-                eprintln!("ngx_metrics_dump_lua_stack: {}", e);
+                let _ = writeln!(std::io::stderr(), "ngx_metrics_dump_lua_stack: {}", e);
                 writer.into_inner()[0] = 0;
                 return 1;
             }
@@ -152,43 +152,38 @@ struct State {
     spans: Vec<Span>,
 }
 
-struct Global(UnsafeCell<Option<State>>);
-// SAFETY: accessed only through `with_state`, which admits only the main thread.
-unsafe impl Sync for Global {}
-
-static STATE: Global = Global(UnsafeCell::new(None));
-
+// Set by `ngx_metrics_init` on nginx's main thread (inherited by forked workers).
+// Other threads see `None`, so their calls are ignored.
 thread_local! {
-    static ON_MAIN_THREAD: Cell<bool> = const { Cell::new(false) };
+    static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
 }
 
-fn on_main_thread() -> bool {
-    ON_MAIN_THREAD.get()
-}
-
-/// `f` must not call back into anything that uses `with_state`.
+/// Returns `None` off the main thread, on re-entry, or during thread teardown.
 fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> Option<R> {
-    if !on_main_thread() {
-        return None;
-    }
-    // SAFETY: single thread (checked above), and `f` doesn't re-enter.
-    unsafe { (*STATE.0.get()).as_mut() }.map(f)
+    STATE
+        .try_with(|cell| {
+            let mut state = cell.try_borrow_mut().ok()?;
+            state.as_mut().map(f)
+        })
+        .ok()
+        .flatten()
 }
 
 impl State {
-    fn exit_span(&mut self) {
-        let Some(span) = self.spans.pop() else { return };
+    /// Returns the span's total wall time.
+    fn exit_span(&mut self) -> Option<i64> {
+        let span = self.spans.pop()?;
         let wall = clock_ns(libc::CLOCK_MONOTONIC) - span.start_wall;
         let cpu = clock_ns(libc::CLOCK_THREAD_CPUTIME_ID) - span.start_cpu;
         if let Some(parent) = self.spans.last_mut() {
             parent.children_wall += wall;
             parent.children_cpu += cpu;
         }
-        ngx_metric_report(&raw mut ngx_metric_any_event_handler_time_ns, wall);
         self.report_handler(
             span.handler.wrapping_sub(self.base_address),
             [wall, wall - span.children_wall, cpu, cpu - span.children_cpu],
         );
+        Some(wall)
     }
 
     fn report_handler(&mut self, relative_addr: usize, values: [i64; 4]) {
@@ -218,21 +213,19 @@ pub extern "C" fn ngx_metrics_init(log: *mut ngx_log_t) {
         log_error(log, &e);
         HashMap::new()
     });
-    eprintln!("num symbols: {}", symbols.len());
+    let _ = writeln!(std::io::stderr(), "num symbols: {}", symbols.len());
     let state = State {
         base_address: base_address(),
         symbols,
         dynamic: Vec::with_capacity(MAX_DYNAMIC_METRICS),
         spans: Vec::new(),
     };
-    ON_MAIN_THREAD.set(true);
-    // SAFETY: called once from nginx's main(), before any other entry point.
-    unsafe { *STATE.0.get() = Some(state) };
+    STATE.set(Some(state));
 }
 
 #[no_mangle]
 pub extern "C" fn ngx_metric_report(metric: *mut ngx_metric_t, value: i64) {
-    if !on_main_thread() {
+    if with_state(|_| ()).is_none() {
         return;
     }
     // SAFETY: C passes a pointer to one of the builtin metrics.
@@ -275,7 +268,9 @@ pub extern "C" fn ngx_metrics_span_enter(handler: *const c_void) {
 
 #[no_mangle]
 pub extern "C" fn ngx_metrics_span_exit() {
-    with_state(State::exit_span);
+    if let Some(wall) = with_state(State::exit_span).flatten() {
+        ngx_metric_report(&raw mut ngx_metric_any_event_handler_time_ns, wall);
+    }
 }
 
 #[no_mangle]
@@ -374,14 +369,26 @@ mod tests {
         assert!(parse_symbols("zz t foo\n").is_err());
     }
 
-    #[test]
-    fn spans_report_self_and_total_time() {
-        let mut s = State {
+    fn test_state(symbols: &str) -> State {
+        State {
             base_address: 0x1000,
-            symbols: parse_symbols("10 t outer\n20 t inner\n").unwrap(),
+            symbols: parse_symbols(symbols).unwrap(),
             dynamic: Vec::with_capacity(MAX_DYNAMIC_METRICS),
             spans: Vec::new(),
-        };
+        }
+    }
+
+    #[test]
+    fn reentry_and_other_threads_are_ignored() {
+        STATE.set(Some(test_state("")));
+        assert_eq!(with_state(|_| with_state(|_| ())), Some(None));
+        assert_eq!(std::thread::spawn(|| with_state(|_| ())).join().unwrap(), None);
+        assert_eq!(with_state(|_| ()), Some(()));
+    }
+
+    #[test]
+    fn spans_report_self_and_total_time() {
+        let mut s = test_state("10 t outer\n20 t inner\n");
         let span = |handler| Span { handler, start_wall: 0, start_cpu: 0, children_wall: 0, children_cpu: 0 };
         s.spans.push(span(0x1010));
         s.spans.push(span(0x1020));
