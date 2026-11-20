@@ -126,6 +126,7 @@ fn clock_ns(clock: libc::clockid_t) -> i64 {
     ts.tv_sec * 1_000_000_000 + ts.tv_nsec
 }
 
+/// The address the executable is loaded at, which symbol addresses are relative to. 0 if not found.
 fn base_address() -> usize {
     unsafe extern "C" fn callback(
         info: *mut libc::dl_phdr_info,
