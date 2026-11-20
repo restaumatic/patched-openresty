@@ -19,6 +19,15 @@ void ngx_metric_report(ngx_metric_e metric, int64_t value);
 
 // Returns all metrics in the Prometheus text format, to be freed with ngx_metrics_free_result.
 // With `reset`, zeroes them afterwards. NULL off the main thread and before ngx_metrics_init.
+// From a Lua handler:
+//   local ffi = require "ffi"
+//   ffi.cdef[[
+//     char *ngx_metrics_prometheus(int reset);
+//     void ngx_metrics_free_result(char *metrics);
+//   ]]
+//   local metrics = ffi.C.ngx_metrics_prometheus(1)
+//   if metrics == nil then return ngx.exit(ngx.HTTP_SERVICE_UNAVAILABLE) end
+//   ngx.print(ffi.string(ffi.gc(metrics, ffi.C.ngx_metrics_free_result)))
 // TODO: serve metrics without Lua, from an nginx directive (e.g. with the ngx crate).
 char *ngx_metrics_prometheus(int reset);
 void ngx_metrics_free_result(char *metrics);
