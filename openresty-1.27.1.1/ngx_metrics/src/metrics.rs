@@ -86,6 +86,13 @@ struct Span {
     children_cpu: i64,
 }
 
+struct SpanTimes {
+    total_wall: i64,
+    self_wall: i64,
+    total_cpu: i64,
+    self_cpu: i64,
+}
+
 struct State {
     base_address: usize,
     handlers: HashMap<usize, Handler>,
@@ -162,17 +169,17 @@ impl State {
         if let Some(relative_addr) = span.handler.checked_sub(self.base_address) {
             self.report_handler(
                 relative_addr,
-                [
-                    wall,
-                    wall - span.children_wall,
-                    cpu,
-                    cpu - span.children_cpu,
-                ],
+                &SpanTimes {
+                    total_wall: wall,
+                    self_wall: wall - span.children_wall,
+                    total_cpu: cpu,
+                    self_cpu: cpu - span.children_cpu,
+                },
             );
         }
     }
 
-    fn report_handler(&mut self, relative_addr: usize, values: [i64; 4]) {
+    fn report_handler(&mut self, relative_addr: usize, times: &SpanTimes) {
         let Some(handler) = self.handlers.get_mut(&relative_addr) else {
             return;
         };
@@ -193,6 +200,12 @@ impl State {
             });
             *handler.metrics.insert(ids)
         };
+        let values = [
+            times.total_wall,
+            times.self_wall,
+            times.total_cpu,
+            times.self_cpu,
+        ];
         for (id, value) in ids.into_iter().zip(values) {
             self.metrics[id].report(value);
         }
@@ -260,6 +273,15 @@ mod tests {
         )
     }
 
+    fn times(v: i64) -> SpanTimes {
+        SpanTimes {
+            total_wall: v,
+            self_wall: v,
+            total_cpu: v,
+            self_cpu: v,
+        }
+    }
+
     #[test]
     fn reentry_and_other_threads_are_ignored() {
         STATE.set(Some(test_state(&[])));
@@ -283,7 +305,7 @@ mod tests {
                 .collect::<Vec<_>>(),
         );
         for (addr, _) in &names {
-            s.report_handler(*addr, [1; 4]);
+            s.report_handler(*addr, &times(1));
         }
         assert_eq!(s.metrics.len(), BUILTIN_NAMES.len() + MAX_DYNAMIC_METRICS);
         assert_eq!(
@@ -314,7 +336,7 @@ mod tests {
         let mut s = test_state(&[(0x10, "h")]);
         s.metrics[2].report(10);
         s.metrics[2].report(5);
-        s.report_handler(0x10, [3; 4]);
+        s.report_handler(0x10, &times(3));
         let out = s.prometheus(true);
         assert!(out.starts_with(
             "any_event_handler_time_ns_count 0\nany_event_handler_time_ns_sum 0\n\
