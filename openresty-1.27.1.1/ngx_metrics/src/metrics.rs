@@ -39,6 +39,13 @@ impl Metric {
         self.sum += value;
     }
 
+    fn reset(&mut self) {
+        self.count = 0;
+        self.sum = 0;
+        self.min = 0;
+        self.max = 0;
+    }
+
     #[allow(clippy::cast_precision_loss)]
     fn write_prometheus(&self, out: &mut String) {
         let Metric {
@@ -219,11 +226,7 @@ impl State {
         for m in &mut self.metrics {
             m.write_prometheus(&mut out);
             if reset {
-                *m = Metric {
-                    name: m.name,
-                    handler: m.handler.take(),
-                    ..Default::default()
-                };
+                m.reset();
             }
         }
         out
