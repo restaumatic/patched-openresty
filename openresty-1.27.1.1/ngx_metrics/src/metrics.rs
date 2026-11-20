@@ -57,11 +57,11 @@ impl Metric {
             0 => (0.0, 0, 0),
             _ => (*sum as f64 / *count as f64, *min, *max),
         };
-        let _ = write!(
-            out,
-            "{name}_count{tags} {count}\n{name}_sum{tags} {sum}\n{name}_avg{tags} {avg}\n\
-             {name}_min{tags} {min}\n{name}_max{tags} {max}\n"
-        );
+        let _ = writeln!(out, "{name}_count{tags} {count}");
+        let _ = writeln!(out, "{name}_sum{tags} {sum}");
+        let _ = writeln!(out, "{name}_avg{tags} {avg}");
+        let _ = writeln!(out, "{name}_min{tags} {min}");
+        let _ = writeln!(out, "{name}_max{tags} {max}");
     }
 }
 
