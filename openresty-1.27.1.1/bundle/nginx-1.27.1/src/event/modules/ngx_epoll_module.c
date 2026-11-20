@@ -800,7 +800,7 @@ ngx_epoll_process_events(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags)
                    "epoll timer: %M", timer);
 
     if(last_epoll_finished_at != 0) {
-        ngx_metric_report(&ngx_metric_event_loop_latency_ns, ngx_precise_time() - last_epoll_finished_at);
+        ngx_metric_report(NGX_METRIC_EVENT_LOOP_LATENCY_NS, ngx_precise_time() - last_epoll_finished_at);
     }
 
     events = epoll_wait(ep, event_list, (int) nevents, timer);

@@ -1,4 +1,4 @@
-use std::ffi::{c_char, c_int, c_void};
+use std::ffi::{c_char, c_int, c_void, CString};
 use std::io::Write;
 
 use crate::{lua, metrics, symbols};
@@ -9,26 +9,12 @@ mod bindings {
 }
 pub use bindings::*;
 
-#[no_mangle]
-#[allow(non_upper_case_globals)]
-pub static mut ngx_metric_any_event_handler_time_ns: ngx_metric_t =
-    ngx_metric_t::new(c"any_event_handler_time_ns", std::ptr::null());
-#[no_mangle]
-#[allow(non_upper_case_globals)]
-pub static mut ngx_metric_open_and_stat_file_time_ns: ngx_metric_t =
-    ngx_metric_t::new(c"open_and_stat_file_time_ns", std::ptr::null());
-#[no_mangle]
-#[allow(non_upper_case_globals)]
-pub static mut ngx_metric_event_loop_latency_ns: ngx_metric_t =
-    ngx_metric_t::new(c"event_loop_latency_ns", std::ptr::null());
-
-fn builtin_metrics() -> [*mut ngx_metric_t; 3] {
-    [
-        &raw mut ngx_metric_any_event_handler_time_ns,
-        &raw mut ngx_metric_open_and_stat_file_time_ns,
-        &raw mut ngx_metric_event_loop_latency_ns,
-    ]
-}
+const _: () = assert!(
+    ngx_metric_e_NGX_METRIC_ANY_EVENT_HANDLER_TIME_NS == 0
+        && ngx_metric_e_NGX_METRIC_OPEN_AND_STAT_FILE_TIME_NS == 1
+        && ngx_metric_e_NGX_METRIC_EVENT_LOOP_LATENCY_NS == 2
+        && metrics::BUILTIN_NAMES.len() == 3
+);
 
 /// # Safety
 /// `log` is an nginx log.
@@ -43,38 +29,25 @@ pub unsafe extern "C" fn ngx_metrics_init(log: *mut ngx_log_t) {
     metrics::init(base_address(), symbols);
 }
 
+#[no_mangle]
+pub extern "C" fn ngx_metric_report(metric: ngx_metric_e, value: i64) {
+    metrics::report_builtin(metric as usize, value);
+}
+
+#[no_mangle]
+pub extern "C" fn ngx_metrics_prometheus(reset: c_int) -> *mut c_char {
+    metrics::prometheus(reset != 0)
+        .and_then(|s| CString::new(s).ok())
+        .map_or(std::ptr::null_mut(), CString::into_raw)
+}
+
 /// # Safety
-/// `metric` is null or points to a valid `ngx_metric_t` that nothing else references during the call.
+/// `metrics` is null or a not yet freed result of `ngx_metrics_prometheus`.
 #[no_mangle]
-pub unsafe extern "C" fn ngx_metric_report(metric: *mut ngx_metric_t, value: i64) {
-    if !metrics::active() {
-        return;
-    }
-    // SAFETY: this function's contract.
-    if let Some(metric) = unsafe { metric.as_mut() } {
-        metric.report(value);
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn ngx_get_num_metrics() -> c_int {
-    if !metrics::active() {
-        return 0;
-    }
-    (builtin_metrics().len() + metrics::num_dynamic()) as c_int
-}
-
-/// The pointer stays valid for the life of the process.
-#[no_mangle]
-pub extern "C" fn ngx_get_metric(index: c_int) -> *mut ngx_metric_t {
-    let builtins = builtin_metrics();
-    let index = match usize::try_from(index) {
-        Ok(i) if metrics::active() => i,
-        _ => return std::ptr::null_mut(),
-    };
-    match index.checked_sub(builtins.len()) {
-        None => builtins[index],
-        Some(d) => metrics::dynamic(d).unwrap_or(std::ptr::null_mut()),
+pub unsafe extern "C" fn ngx_metrics_free(metrics: *mut c_char) {
+    if !metrics.is_null() {
+        // SAFETY: this function's contract.
+        drop(unsafe { CString::from_raw(metrics) });
     }
 }
 
@@ -85,10 +58,7 @@ pub extern "C" fn ngx_metrics_span_enter(handler: *const c_void) {
 
 #[no_mangle]
 pub extern "C" fn ngx_metrics_span_exit() {
-    if let Some(wall) = metrics::exit_span() {
-        // SAFETY: a builtin metric; `ngx_metric_report` keeps its reference to the call.
-        unsafe { ngx_metric_report(&raw mut ngx_metric_any_event_handler_time_ns, wall) };
-    }
+    metrics::exit_span();
 }
 
 #[no_mangle]
@@ -174,7 +144,7 @@ const NGX_LOG_ERR: usize = 4;
 /// # Safety
 /// `log` is an nginx log.
 unsafe fn log_error(log: *mut ngx_log_t, msg: &str) {
-    let msg = std::ffi::CString::new(msg).unwrap_or_default();
+    let msg = CString::new(msg).unwrap_or_default();
     // SAFETY: `log` is an nginx log (this function's contract); `%s` takes a NUL-terminated string.
     unsafe { ngx_log_error_core(NGX_LOG_ERR, log, 0, c"ngx_metrics: %s".as_ptr(), msg.as_ptr()) };
 }

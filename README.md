@@ -17,6 +17,6 @@ The included metrics are:
 
 The metrics can be read from Lua using FFI. There's no lua api provided here.
 
-See `ngx_metrics.h` and functions `ngx_get_num_metrics` and `ngx_get_metric`.
+See `ngx_metrics.h` and functions `ngx_metrics_prometheus` and `ngx_metrics_free`.
 
 Metrics are kept per worker process, and a read returns the numbers of the worker that served it, so they are meaningful only with `worker_processes 1`.

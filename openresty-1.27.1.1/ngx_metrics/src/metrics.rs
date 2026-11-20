@@ -2,26 +2,36 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::ops::{Deref, DerefMut};
-use std::ffi::{c_char, CStr, CString};
+use std::fmt::Write;
 
-use crate::ffi::{cpu_time_ns, ngx_metric_t, wall_time_ns};
+use crate::ffi::{cpu_time_ns, wall_time_ns};
+
+/// In the order of `ngx_metric_e`.
+pub const BUILTIN_NAMES: [&str; 3] =
+    ["any_event_handler_time_ns", "open_and_stat_file_time_ns", "event_loop_latency_ns"];
+const ANY_EVENT_HANDLER_TIME_NS: usize = 0;
 
 const MAX_DYNAMIC_METRICS: usize = 128 * 4;
 
-const SPAN_METRIC_NAMES: [&CStr; 4] = [
-    c"event_handler_total_wall_time_ns",
-    c"event_handler_self_wall_time_ns",
-    c"event_handler_total_cpu_time_ns",
-    c"event_handler_self_cpu_time_ns",
+const SPAN_METRIC_NAMES: [&str; 4] = [
+    "event_handler_total_wall_time_ns",
+    "event_handler_self_wall_time_ns",
+    "event_handler_total_cpu_time_ns",
+    "event_handler_self_cpu_time_ns",
 ];
 
-impl ngx_metric_t {
-    pub const fn new(name: &'static CStr, tags: *const c_char) -> Self {
-        Self { name: name.as_ptr(), tags, count: 0, sum: 0, min: 0, max: 0 }
-    }
+#[derive(Default)]
+struct Metric {
+    name: &'static str,
+    tags: String,
+    count: i64,
+    sum: i64,
+    min: i64,
+    max: i64,
+}
 
-    pub fn report(&mut self, value: i64) {
+impl Metric {
+    fn report(&mut self, value: i64) {
         if self.count == 0 {
             self.min = value;
             self.max = value;
@@ -32,49 +42,23 @@ impl ngx_metric_t {
         self.count += 1;
         self.sum += value;
     }
-}
 
-/// A vector with a fixed capacity, allocated up front, so pointers to its elements stay valid.
-/// Could be an `arrayvec::ArrayVec`; hand-rolled to avoid the dependency.
-struct FixedVec<T> {
-    items: Box<[T]>,
-    len: usize,
-}
-
-impl<T: Clone> FixedVec<T> {
-    /// `fill` takes up the unused slots, so none of them is uninitialized.
-    fn new(capacity: usize, fill: T) -> Self {
-        Self { items: vec![fill; capacity].into_boxed_slice(), len: 0 }
-    }
-
-    fn remaining_capacity(&self) -> usize {
-        self.items.len() - self.len
-    }
-
-    /// Returns the new element's index, or gives the element back when full.
-    fn try_push(&mut self, item: T) -> Result<usize, T> {
-        let Some(slot) = self.items.get_mut(self.len) else { return Err(item) };
-        *slot = item;
-        self.len += 1;
-        Ok(self.len - 1)
-    }
-}
-
-impl<T> Deref for FixedVec<T> {
-    type Target = [T];
-    fn deref(&self) -> &[T] {
-        &self.items[..self.len]
-    }
-}
-
-impl<T> DerefMut for FixedVec<T> {
-    fn deref_mut(&mut self) -> &mut [T] {
-        &mut self.items[..self.len]
+    fn write_prometheus(&self, out: &mut String) {
+        let Metric { name, tags, count, sum, min, max } = self;
+        let (avg, min, max) = match count {
+            0 => (0.0, 0, 0),
+            _ => (*sum as f64 / *count as f64, *min, *max),
+        };
+        let _ = write!(
+            out,
+            "{name}_count{tags} {count}\n{name}_sum{tags} {sum}\n{name}_avg{tags} {avg}\n\
+             {name}_min{tags} {min}\n{name}_max{tags} {max}\n"
+        );
     }
 }
 
 struct Handler {
-    tags: CString,
+    tags: String,
     metrics: Option<[usize; 4]>,
 }
 
@@ -89,7 +73,8 @@ struct Span {
 struct State {
     base_address: usize,
     handlers: HashMap<usize, Handler>,
-    dynamic: FixedVec<ngx_metric_t>,
+    /// The builtins at their `ngx_metric_e` index, then per-handler metrics.
+    metrics: Vec<Metric>,
     spans: Vec<Span>,
 }
 
@@ -114,12 +99,12 @@ impl State {
     fn new(base_address: usize, symbols: HashMap<usize, String>) -> Self {
         let handlers = symbols
             .into_iter()
-            .filter_map(|(addr, name)| {
-                let tags = CString::new(format!("{{handler=\"{name}\"}}")).ok()?;
-                Some((addr, Handler { tags, metrics: None }))
-            })
+            .filter(|(_, name)| !name.contains('\0'))
+            .map(|(addr, name)| (addr, Handler { tags: format!("{{handler=\"{name}\"}}"), metrics: None }))
             .collect();
-        State { base_address, handlers, dynamic: FixedVec::new(MAX_DYNAMIC_METRICS, ngx_metric_t::new(c"", std::ptr::null())), spans: Vec::new() }
+        let mut metrics = Vec::with_capacity(BUILTIN_NAMES.len() + MAX_DYNAMIC_METRICS);
+        metrics.extend(BUILTIN_NAMES.map(|name| Metric { name, ..Default::default() }));
+        State { base_address, handlers, metrics, spans: Vec::new() }
     }
 
     fn enter_span(&mut self, handler: usize) {
@@ -132,20 +117,19 @@ impl State {
         });
     }
 
-    /// Returns the span's total wall time.
-    fn exit_span(&mut self) -> Option<i64> {
-        let span = self.spans.pop()?;
+    fn exit_span(&mut self) {
+        let Some(span) = self.spans.pop() else { return };
         let wall = wall_time_ns() - span.start_wall;
         let cpu = cpu_time_ns() - span.start_cpu;
         if let Some(parent) = self.spans.last_mut() {
             parent.children_wall += wall;
             parent.children_cpu += cpu;
         }
+        self.metrics[ANY_EVENT_HANDLER_TIME_NS].report(wall);
         self.report_handler(
             span.handler.wrapping_sub(self.base_address),
             [wall, wall - span.children_wall, cpu, cpu - span.children_cpu],
         );
-        Some(wall)
     }
 
     fn report_handler(&mut self, relative_addr: usize, values: [i64; 4]) {
@@ -153,28 +137,35 @@ impl State {
         let ids = match handler.metrics {
             Some(ids) => ids,
             None => {
-                // All four or none, so a handler never has some of its metrics.
-                if self.dynamic.remaining_capacity() < SPAN_METRIC_NAMES.len() {
+                let dynamic = self.metrics.len() - BUILTIN_NAMES.len();
+                if MAX_DYNAMIC_METRICS - dynamic < SPAN_METRIC_NAMES.len() {
                     return;
                 }
-                let mut ids = [0; 4];
-                for (id, name) in ids.iter_mut().zip(SPAN_METRIC_NAMES) {
-                    let Ok(i) = self.dynamic.try_push(ngx_metric_t::new(name, handler.tags.as_ptr())) else {
-                        return;
-                    };
-                    *id = i;
-                }
+                let ids = SPAN_METRIC_NAMES.map(|name| {
+                    self.metrics.push(Metric { name, tags: handler.tags.clone(), ..Default::default() });
+                    self.metrics.len() - 1
+                });
                 *handler.metrics.insert(ids)
             }
         };
         for (id, value) in ids.into_iter().zip(values) {
-            self.dynamic[id].report(value);
+            self.metrics[id].report(value);
         }
+    }
+
+    fn prometheus(&mut self, reset: bool) -> String {
+        let mut out = String::new();
+        for m in &mut self.metrics {
+            m.write_prometheus(&mut out);
+            if reset {
+                *m = Metric { name: m.name, tags: std::mem::take(&mut m.tags), ..Default::default() };
+            }
+        }
+        out
     }
 }
 
-/// Only the first call on a thread has an effect: replacing the state would invalidate the pointers
-/// `dynamic` has handed out.
+/// Only the first call on a thread has an effect.
 pub fn init(base_address: usize, symbols: HashMap<usize, String>) {
     let _ = STATE.try_with(|cell| {
         if let Ok(mut state) = cell.try_borrow_mut() {
@@ -185,26 +176,25 @@ pub fn init(base_address: usize, symbols: HashMap<usize, String>) {
     });
 }
 
-/// False off the main thread, before `init` and while the state is borrowed.
-pub fn active() -> bool {
-    with_state(|_| ()).is_some()
+/// Ignores an index that isn't a builtin.
+pub fn report_builtin(index: usize, value: i64) {
+    with_state(|s| {
+        if index < BUILTIN_NAMES.len() {
+            s.metrics[index].report(value);
+        }
+    });
 }
 
-pub fn num_dynamic() -> usize {
-    with_state(|s| s.dynamic.len()).unwrap_or(0)
-}
-
-pub fn dynamic(index: usize) -> Option<*mut ngx_metric_t> {
-    with_state(|s| s.dynamic.get_mut(index).map(|m| m as *mut _)).flatten()
+pub fn prometheus(reset: bool) -> Option<String> {
+    with_state(|s| s.prometheus(reset))
 }
 
 pub fn enter_span(handler: usize) {
     with_state(|s| s.enter_span(handler));
 }
 
-/// Returns the span's total wall time.
-pub fn exit_span() -> Option<i64> {
-    with_state(State::exit_span).flatten()
+pub fn exit_span() {
+    with_state(State::exit_span);
 }
 
 #[cfg(test)]
@@ -230,7 +220,7 @@ mod tests {
         for (addr, _) in &names {
             s.report_handler(*addr, [1; 4]);
         }
-        assert_eq!(s.dynamic.remaining_capacity(), 0);
+        assert_eq!(s.metrics.len(), BUILTIN_NAMES.len() + MAX_DYNAMIC_METRICS);
         assert_eq!(s.handlers.values().filter(|h| h.metrics.is_none()).count(), 1);
     }
 
@@ -241,15 +231,34 @@ mod tests {
         s.enter_span(0x1020);
         s.exit_span();
         s.exit_span();
-        assert_eq!(s.dynamic.len(), 8);
-        assert_eq!(
-            CStr::from_bytes_with_nul(s.handlers[&0x20].tags.as_bytes_with_nul()).unwrap(),
-            c"{handler=\"inner\"}"
-        );
-        let [inner_total, _, _, _] = [0, 1, 2, 3].map(|i| s.dynamic[i].sum);
-        let [outer_total, outer_self, _, _] = [4, 5, 6, 7].map(|i| s.dynamic[i].sum);
+        assert_eq!(s.metrics.len(), 3 + 8);
+        assert_eq!(s.metrics[3].tags, "{handler=\"inner\"}");
+        let [inner_total, _, _, _] = [3, 4, 5, 6].map(|i| s.metrics[i].sum);
+        let [outer_total, outer_self, _, _] = [7, 8, 9, 10].map(|i| s.metrics[i].sum);
         assert_eq!(outer_self, outer_total - inner_total);
-        assert!(s.dynamic.iter().all(|m| m.count == 1));
+        assert_eq!(s.metrics[ANY_EVENT_HANDLER_TIME_NS].count, 2);
+        assert!(s.metrics[3..].iter().all(|m| m.count == 1));
         assert!(s.spans.is_empty());
+    }
+
+    #[test]
+    fn prometheus_renders_and_resets() {
+        let mut s = test_state(&[(0x10, "h")]);
+        s.metrics[2].report(10);
+        s.metrics[2].report(5);
+        s.report_handler(0x10, [3; 4]);
+        let out = s.prometheus(true);
+        assert!(out.starts_with(
+            "any_event_handler_time_ns_count 0\nany_event_handler_time_ns_sum 0\n\
+             any_event_handler_time_ns_avg 0\nany_event_handler_time_ns_min 0\nany_event_handler_time_ns_max 0\n"
+        ));
+        assert!(out.contains(
+            "event_loop_latency_ns_count 2\nevent_loop_latency_ns_sum 15\nevent_loop_latency_ns_avg 7.5\n\
+             event_loop_latency_ns_min 5\nevent_loop_latency_ns_max 10\n"
+        ));
+        assert!(out.contains("event_handler_self_cpu_time_ns_max{handler=\"h\"} 3\n"));
+        assert_eq!(out.lines().count(), (3 + 4) * 5);
+        assert!(s.metrics.iter().all(|m| m.count == 0 && m.sum == 0));
+        assert!(s.prometheus(false).contains("event_handler_self_cpu_time_ns_count{handler=\"h\"} 0\n"));
     }
 }

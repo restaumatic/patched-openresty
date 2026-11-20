@@ -33,15 +33,11 @@ http {
       content_by_lua_block {
         local ffi = require "ffi"
         ffi.cdef[[
-          typedef struct { const char *name; const char *tags; int64_t count, sum, min, max; } ngx_metric_t;
-          int ngx_get_num_metrics();
-          ngx_metric_t *ngx_get_metric(int index);
+          char *ngx_metrics_prometheus(int reset);
+          void ngx_metrics_free(char *metrics);
         ]]
-        for i = 0, ffi.C.ngx_get_num_metrics() - 1 do
-          local m = ffi.C.ngx_get_metric(i)
-          local tags = m.tags ~= nil and ffi.string(m.tags) or ""
-          ngx.say(ffi.string(m.name), tags, " ", tonumber(m.count), " ", tonumber(m.sum))
-        end
+        local metrics = ffi.gc(ffi.C.ngx_metrics_prometheus(0), ffi.C.ngx_metrics_free)
+        ngx.print(ffi.string(metrics))
       }
     }
   }
@@ -50,7 +46,7 @@ http {
 
 
 def run(nginx, workdir):
-    """Starts nginx, sends a few requests and returns ({metric: (count, sum)}, stderr, error log)."""
+    """Starts nginx, sends a few requests and returns ({metric+tags: (count, sum)}, stderr, error log)."""
     port = random.randint(20000, 40000)
     logs = workdir / "logs"
     shutil.rmtree(logs, ignore_errors=True)
@@ -77,10 +73,13 @@ def run(nginx, workdir):
         proc.terminate()
         _, stderr = proc.communicate(timeout=5)
 
+    values = dict(line.rsplit(" ", 1) for line in body.splitlines())
     metrics = {}
-    for line in body.splitlines():
-        name, count, total = line.rsplit(" ", 2)
-        metrics[name] = (int(count), int(total))
+    for key, value in values.items():
+        name, sep, tags = key.partition("{")
+        if name.endswith("_count"):
+            base = name.removesuffix("_count")
+            metrics[base + sep + tags] = (int(value), int(values[base + "_sum" + sep + tags]))
     return metrics, stderr, (logs / "error.log").read_text()
 
 
