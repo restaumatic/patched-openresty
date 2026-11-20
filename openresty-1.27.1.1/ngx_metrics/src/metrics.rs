@@ -6,7 +6,7 @@ use std::fmt::Write;
 
 use crate::ffi::{cpu_time_ns, ngx_metric_e_NGX_METRIC_ANY_EVENT_HANDLER_TIME_NS, wall_time_ns};
 
-/// In the order of `ngx_metric_e`.
+/// Names of the builtin metrics, in the order of `ngx_metric_e`.
 pub const BUILTIN_NAMES: [&str; 3] = [
     "any_event_handler_time_ns",
     "open_and_stat_file_time_ns",
@@ -67,11 +67,11 @@ impl Metric {
 
 struct Handler {
     name: String,
-    /// Set on the handler's first report.
+    /// The handler's metrics, created on its first report.
     metrics: Option<HandlerMetrics>,
 }
 
-/// Indexes into `State::metrics`.
+/// A handler's four metrics, as indexes into `State::metrics`.
 #[derive(Clone, Copy)]
 struct HandlerMetrics {
     total_wall: usize,
@@ -230,6 +230,8 @@ impl State {
     }
 }
 
+/// Sets up this thread's state from the executable's base address and its symbols.
+///
 /// Only the first call on a thread has an effect.
 pub fn init(base_address: usize, symbols: HashMap<usize, String>) {
     let _ = STATE.try_with(|cell| {
@@ -241,6 +243,8 @@ pub fn init(base_address: usize, symbols: HashMap<usize, String>) {
     });
 }
 
+/// Reports `value` for the builtin metric at `index` (an `ngx_metric_e` value).
+///
 /// Ignores an index that isn't a builtin.
 pub fn report_builtin(index: usize, value: i64) {
     with_state(|s| {

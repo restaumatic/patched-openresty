@@ -23,6 +23,8 @@ const _: () = assert!(
         && metrics::BUILTIN_NAMES.len() == 3
 );
 
+/// Loads the symbols and sets up metrics on this thread. A load error is logged to `log`.
+///
 /// # Safety
 /// `log` is an nginx log.
 #[no_mangle]
@@ -48,6 +50,8 @@ pub extern "C" fn ngx_metrics_prometheus(reset: c_int) -> *mut c_char {
         .map_or(std::ptr::null_mut(), CString::into_raw)
 }
 
+/// Frees a result of `ngx_metrics_prometheus`.
+///
 /// # Safety
 /// `metrics` is null or a not yet freed result of `ngx_metrics_prometheus`.
 #[no_mangle]
@@ -73,6 +77,8 @@ pub extern "C" fn ngx_precise_time() -> i64 {
     wall_time_ns()
 }
 
+/// Writes the Lua call stack of `l` into `buf`, NUL-terminated and truncated to fit, and returns its length.
+///
 /// # Safety
 /// `l` is a live Lua state, and `buf` is writable for `bufsize` bytes.
 #[no_mangle]
@@ -147,6 +153,8 @@ extern "C" {
 
 const NGX_LOG_ERR: usize = 4;
 
+/// Logs `msg` to `log` at ERR level.
+///
 /// # Safety
 /// `log` is an nginx log.
 unsafe fn log_error(log: *mut ngx_log_t, msg: &str) {

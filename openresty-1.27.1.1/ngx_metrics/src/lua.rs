@@ -3,10 +3,11 @@ use std::mem::MaybeUninit;
 
 use crate::ffi::{lua_Debug, lua_State, lua_getinfo, lua_getstack};
 
+/// Writes the call stack of `l` as space-separated `name@file:line` frames, skipping C frames.
+///
 /// # Safety
 /// `l` is a live Lua state.
 pub unsafe fn dump_stack(l: *mut lua_State, mut writer: impl Write) -> std::io::Result<()> {
-    // Translate the above C to Rust
     let mut level = 0;
     loop {
         let mut ar_u: MaybeUninit<lua_Debug> = MaybeUninit::uninit();
