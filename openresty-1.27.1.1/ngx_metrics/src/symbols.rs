@@ -27,6 +27,9 @@ fn parse(contents: &str) -> Result<HashMap<usize, String>, String> {
         else {
             return Err(err());
         };
+        if name.contains('\0') {
+            return Err(err());
+        }
         let addr = usize::from_str_radix(addr, 16).map_err(|_| err())?;
         symbols.insert(addr, name.to_string());
     }
@@ -48,5 +51,6 @@ mod tests {
         assert!(!symbols.contains_key(&0x49394));
         assert!(parse("0000000000049393 t\n").is_err());
         assert!(parse("zz t foo\n").is_err());
+        assert!(parse("0000000000049393 t fo\0o\n").is_err());
     }
 }

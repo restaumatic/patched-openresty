@@ -117,7 +117,6 @@ impl State {
     fn new(base_address: usize, symbols: HashMap<usize, String>) -> Self {
         let handlers = symbols
             .into_iter()
-            .filter(|(_, name)| !name.contains('\0'))
             .map(|(addr, name)| {
                 (
                     addr,
