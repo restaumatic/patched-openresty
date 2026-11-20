@@ -74,6 +74,7 @@ impl Metric {
 
 struct Handler {
     name: String,
+    /// Indexes into `State::metrics`, set on the handler's first report.
     metrics: Option<[usize; 4]>,
 }
 
