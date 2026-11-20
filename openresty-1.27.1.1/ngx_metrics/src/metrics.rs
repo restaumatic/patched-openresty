@@ -349,12 +349,18 @@ mod tests {
         s.report_handler(0x10, &times(3));
         let out = s.prometheus(true);
         assert!(out.starts_with(
-            "any_event_handler_time_ns_count 0\nany_event_handler_time_ns_sum 0\n\
-             any_event_handler_time_ns_avg 0\nany_event_handler_time_ns_min 0\nany_event_handler_time_ns_max 0\n"
+            "any_event_handler_time_ns_count 0\n\
+             any_event_handler_time_ns_sum 0\n\
+             any_event_handler_time_ns_avg 0\n\
+             any_event_handler_time_ns_min 0\n\
+             any_event_handler_time_ns_max 0\n"
         ));
         assert!(out.contains(
-            "event_loop_latency_ns_count 2\nevent_loop_latency_ns_sum 15\nevent_loop_latency_ns_avg 7.5\n\
-             event_loop_latency_ns_min 5\nevent_loop_latency_ns_max 10\n"
+            "event_loop_latency_ns_count 2\n\
+             event_loop_latency_ns_sum 15\n\
+             event_loop_latency_ns_avg 7.5\n\
+             event_loop_latency_ns_min 5\n\
+             event_loop_latency_ns_max 10\n"
         ));
         assert!(out.contains("event_handler_self_cpu_time_ns_max{handler=\"h\"} 3\n"));
         assert_eq!(out.lines().count(), (3 + 4) * 5);
