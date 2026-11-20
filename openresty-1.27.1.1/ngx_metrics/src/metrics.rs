@@ -100,7 +100,9 @@ thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
 }
 
-/// Returns `None` off the main thread, on re-entry, or during thread teardown.
+/// Runs `f` on this thread's state and returns its result.
+///
+/// `None` off the main thread, on re-entry, or during thread teardown.
 fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> Option<R> {
     STATE
         .try_with(|cell| {
