@@ -34,9 +34,9 @@ http {
         local ffi = require "ffi"
         ffi.cdef[[
           char *ngx_metrics_prometheus(int reset);
-          void ngx_metrics_free(char *metrics);
+          void ngx_metrics_free_result(char *metrics);
         ]]
-        local metrics = ffi.gc(ffi.C.ngx_metrics_prometheus(0), ffi.C.ngx_metrics_free)
+        local metrics = ffi.gc(ffi.C.ngx_metrics_prometheus(0), ffi.C.ngx_metrics_free_result)
         ngx.print(ffi.string(metrics))
       }
     }

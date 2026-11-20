@@ -17,11 +17,11 @@ typedef enum {
 // Report a measurement for a given metric.
 void ngx_metric_report(ngx_metric_e metric, int64_t value);
 
-// Returns all metrics in the Prometheus text format, to be freed with ngx_metrics_free.
+// Returns all metrics in the Prometheus text format, to be freed with ngx_metrics_free_result.
 // With `reset`, zeroes them afterwards. NULL off the main thread and before ngx_metrics_init.
 // TODO: serve metrics without Lua, from an nginx directive (e.g. with the ngx crate).
 char *ngx_metrics_prometheus(int reset);
-void ngx_metrics_free(char *metrics);
+void ngx_metrics_free_result(char *metrics);
 
 // Calls `handler(...)` inside a span: see ngx_metrics_span_enter.
 #define NGX_CALL_HANDLER(handler, ...) do { ngx_metrics_span_enter(handler); (handler)(__VA_ARGS__); ngx_metrics_span_exit(); } while(0)

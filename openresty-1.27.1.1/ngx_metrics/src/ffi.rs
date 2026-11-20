@@ -44,7 +44,7 @@ pub extern "C" fn ngx_metrics_prometheus(reset: c_int) -> *mut c_char {
 /// # Safety
 /// `metrics` is null or a not yet freed result of `ngx_metrics_prometheus`.
 #[no_mangle]
-pub unsafe extern "C" fn ngx_metrics_free(metrics: *mut c_char) {
+pub unsafe extern "C" fn ngx_metrics_free_result(metrics: *mut c_char) {
     if !metrics.is_null() {
         // SAFETY: this function's contract.
         drop(unsafe { CString::from_raw(metrics) });
