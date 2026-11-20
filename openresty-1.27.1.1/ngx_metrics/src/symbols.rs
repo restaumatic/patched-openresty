@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+// TODO: get rid of generate-symbols, parse ELF directly.
 /// Reads `<executable>.symbols` (from `generate-symbols`): address relative to the executable's base → name.
 pub fn load() -> Result<HashMap<usize, String>, String> {
     let mut path = std::env::current_exe()
