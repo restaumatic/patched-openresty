@@ -16,13 +16,6 @@ const ANY_EVENT_HANDLER_TIME_NS: usize = ngx_metric_e_NGX_METRIC_ANY_EVENT_HANDL
 
 const MAX_DYNAMIC_METRICS: usize = 128 * 4;
 
-const SPAN_METRIC_NAMES: [&str; 4] = [
-    "event_handler_total_wall_time_ns",
-    "event_handler_self_wall_time_ns",
-    "event_handler_total_cpu_time_ns",
-    "event_handler_self_cpu_time_ns",
-];
-
 #[derive(Default)]
 struct Metric {
     name: &'static str,
@@ -74,8 +67,17 @@ impl Metric {
 
 struct Handler {
     name: String,
-    /// Indexes into `State::metrics`, set on the handler's first report.
-    metrics: Option<[usize; 4]>,
+    /// Set on the handler's first report.
+    metrics: Option<HandlerMetrics>,
+}
+
+/// Indexes into `State::metrics`.
+#[derive(Clone, Copy)]
+struct HandlerMetrics {
+    total_wall: usize,
+    self_wall: usize,
+    total_cpu: usize,
+    self_cpu: usize,
 }
 
 struct Span {
@@ -187,28 +189,29 @@ impl State {
             ids
         } else {
             let dynamic = self.metrics.len() - BUILTIN_NAMES.len();
-            if MAX_DYNAMIC_METRICS - dynamic < SPAN_METRIC_NAMES.len() {
+            if MAX_DYNAMIC_METRICS - dynamic < 4 {
                 return;
             }
-            let ids = SPAN_METRIC_NAMES.map(|name| {
+            let mut push = |name| {
                 self.metrics.push(Metric {
                     name,
                     handler: Some(handler.name.clone()),
                     ..Default::default()
                 });
                 self.metrics.len() - 1
-            });
+            };
+            let ids = HandlerMetrics {
+                total_wall: push("event_handler_total_wall_time_ns"),
+                self_wall: push("event_handler_self_wall_time_ns"),
+                total_cpu: push("event_handler_total_cpu_time_ns"),
+                self_cpu: push("event_handler_self_cpu_time_ns"),
+            };
             *handler.metrics.insert(ids)
         };
-        let values = [
-            times.total_wall,
-            times.self_wall,
-            times.total_cpu,
-            times.self_cpu,
-        ];
-        for (id, value) in ids.into_iter().zip(values) {
-            self.metrics[id].report(value);
-        }
+        self.metrics[ids.total_wall].report(times.total_wall);
+        self.metrics[ids.self_wall].report(times.self_wall);
+        self.metrics[ids.total_cpu].report(times.total_cpu);
+        self.metrics[ids.self_cpu].report(times.self_cpu);
     }
 
     fn prometheus(&mut self, reset: bool) -> String {
