@@ -3,7 +3,7 @@ use std::io::Write;
 
 use crate::{lua, metrics, symbols};
 
-#[allow(non_upper_case_globals, non_camel_case_types, non_snake_case, dead_code)]
+#[allow(non_upper_case_globals, non_camel_case_types, non_snake_case, dead_code, clippy::all, clippy::pedantic)]
 mod bindings {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
@@ -23,7 +23,7 @@ pub unsafe extern "C" fn ngx_metrics_init(log: *mut ngx_log_t) {
     let symbols = symbols::load().unwrap_or_else(|e| {
         // SAFETY: `log` is an nginx log (this function's contract).
         unsafe { log_error(log, &e) };
-        Default::default()
+        std::collections::HashMap::default()
     });
     let _ = writeln!(std::io::stderr(), "num symbols: {}", symbols.len());
     metrics::init(base_address(), symbols);
@@ -76,27 +76,23 @@ pub unsafe extern "C" fn ngx_metrics_dump_lua_stack(
 ) -> c_int {
     assert!(bufsize > 0);
 
-    unsafe { libc::memset(buf as *mut _, 0, bufsize as usize) };
-    let slice = unsafe { std::slice::from_raw_parts_mut(buf as *mut u8, bufsize as usize - 1) };
+    let len = bufsize.unsigned_abs() as usize;
+    unsafe { libc::memset(buf.cast(), 0, len) };
+    let slice = unsafe { std::slice::from_raw_parts_mut(buf.cast::<u8>(), len - 1) };
     let mut writer = std::io::Cursor::new(slice);
 
     // SAFETY: `l` is a live Lua state (this function's contract).
     if let Err(e) = unsafe { lua::dump_stack(l, &mut writer) } {
-        match e.kind() {
-            std::io::ErrorKind::WriteZero => {
-                // Buffer too small, stack trace truncated
-                // It's ok
-            }
-            _ => {
-                // TODO: use ngx_log_error
-                let _ = writeln!(std::io::stderr(), "ngx_metrics_dump_lua_stack: {}", e);
-                writer.into_inner()[0] = 0;
-                return 1;
-            }
+        // WriteZero: buffer too small, stack trace truncated. It's ok
+        if e.kind() != std::io::ErrorKind::WriteZero {
+            // TODO: use ngx_log_error
+            let _ = writeln!(std::io::stderr(), "ngx_metrics_dump_lua_stack: {e}");
+            writer.into_inner()[0] = 0;
+            return 1;
         }
     }
 
-    writer.position() as c_int
+    c_int::try_from(writer.position()).unwrap_or(bufsize - 1)
 }
 
 pub fn wall_time_ns() -> i64 {
@@ -123,7 +119,7 @@ fn base_address() -> usize {
         // SAFETY: glibc passes a valid `info`; `data` is the `usize` below.
         unsafe {
             if *(*info).dlpi_name == 0 {
-                *(data as *mut usize) = (*info).dlpi_addr as usize;
+                *data.cast::<usize>() = usize::try_from((*info).dlpi_addr).unwrap_or(0);
                 return 1;
             }
         }
@@ -131,7 +127,7 @@ fn base_address() -> usize {
     }
     let mut base = 0usize;
     // SAFETY: `callback` matches the expected signature and only writes to `base`.
-    unsafe { libc::dl_iterate_phdr(Some(callback), &mut base as *mut usize as *mut c_void) };
+    unsafe { libc::dl_iterate_phdr(Some(callback), (&raw mut base).cast()) };
     base
 }
 

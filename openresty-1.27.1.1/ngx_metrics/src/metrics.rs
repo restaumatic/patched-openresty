@@ -43,6 +43,7 @@ impl Metric {
         self.sum += value;
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn write_prometheus(&self, out: &mut String) {
         let Metric { name, tags, count, sum, min, max } = self;
         let (avg, min, max) = match count {
@@ -133,19 +134,18 @@ impl State {
 
     fn report_handler(&mut self, relative_addr: usize, values: [i64; 4]) {
         let Some(handler) = self.handlers.get_mut(&relative_addr) else { return };
-        let ids = match handler.metrics {
-            Some(ids) => ids,
-            None => {
-                let dynamic = self.metrics.len() - BUILTIN_NAMES.len();
-                if MAX_DYNAMIC_METRICS - dynamic < SPAN_METRIC_NAMES.len() {
-                    return;
-                }
-                let ids = SPAN_METRIC_NAMES.map(|name| {
-                    self.metrics.push(Metric { name, tags: handler.tags.clone(), ..Default::default() });
-                    self.metrics.len() - 1
-                });
-                *handler.metrics.insert(ids)
+        let ids = if let Some(ids) = handler.metrics {
+            ids
+        } else {
+            let dynamic = self.metrics.len() - BUILTIN_NAMES.len();
+            if MAX_DYNAMIC_METRICS - dynamic < SPAN_METRIC_NAMES.len() {
+                return;
             }
+            let ids = SPAN_METRIC_NAMES.map(|name| {
+                self.metrics.push(Metric { name, tags: handler.tags.clone(), ..Default::default() });
+                self.metrics.len() - 1
+            });
+            *handler.metrics.insert(ids)
         };
         for (id, value) in ids.into_iter().zip(values) {
             self.metrics[id].report(value);

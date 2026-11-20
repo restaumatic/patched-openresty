@@ -11,3 +11,6 @@ bindgen = "0.71.1"
 
 [dependencies]
 libc = "0.2.169"
+
+[lints.clippy]
+pedantic = "warn"

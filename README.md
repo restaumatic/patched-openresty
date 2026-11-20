@@ -21,3 +21,5 @@ The metrics can be read from Lua using FFI. There's no lua api provided here.
 See `ngx_metrics.h` and functions `ngx_metrics_prometheus` and `ngx_metrics_free_result`.
 
 Metrics are kept per worker process, and a read returns the numbers of the worker that served it, so they are meaningful only with `worker_processes 1`.
+
+The metrics code is in `openresty-1.27.1.1/ngx_metrics` (Rust). Nothing runs its checks automatically; after `./openresty-1.27.1.1/dev-make`, run `cargo test`, `cargo clippy --all-targets` and `cargo fmt --check` there, and `./test-metrics.py` here.

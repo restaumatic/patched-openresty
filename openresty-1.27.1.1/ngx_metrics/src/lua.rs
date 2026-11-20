@@ -49,5 +49,5 @@ fn get_filename(source: &str) -> &str {
     if source == "=[C]" {
         return "[C]";
     }
-    source.rsplitn(2, '/').next().unwrap_or(source)
+    source.rsplit('/').next().unwrap_or(source)
 }
