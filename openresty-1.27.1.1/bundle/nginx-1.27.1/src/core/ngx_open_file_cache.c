@@ -846,7 +846,7 @@ ngx_open_and_stat_file(ngx_str_t *name, ngx_open_file_info_t *of,
 {
   int64_t start = ngx_precise_time();
   ngx_int_t result = ngx_open_and_stat_file_real(name, of, log);
-  ngx_metric_report(&ngx_metric_open_and_stat_file_time_ns, ngx_precise_time() - start);
+  ngx_metric_report(NGX_METRIC_OPEN_AND_STAT_FILE_TIME_NS, ngx_precise_time() - start);
   return result;
 }
 

@@ -3,44 +3,51 @@
 
 #include <stdint.h>
 
-typedef struct {
-  const char *name;
-  const char *tags;
-
-  int64_t count;
-  int64_t sum;
-  int64_t min;
-  int64_t max;
-} ngx_metric_t;
-
 struct ngx_log_s;
 typedef struct ngx_log_s             ngx_log_t;
 
 void ngx_metrics_init(ngx_log_t *log);
 
-int ngx_get_num_metrics();
-ngx_metric_t *ngx_get_metric(int index);
-
-extern ngx_metric_t ngx_metric_any_event_handler_time_ns;
-extern ngx_metric_t ngx_metric_open_and_stat_file_time_ns;
-extern ngx_metric_t ngx_metric_event_loop_latency_ns;
+typedef enum {
+  NGX_METRIC_ANY_EVENT_HANDLER_TIME_NS,
+  NGX_METRIC_OPEN_AND_STAT_FILE_TIME_NS,
+  NGX_METRIC_EVENT_LOOP_LATENCY_NS,
+} ngx_metric_e;
 
 // Report a measurement for a given metric.
-void ngx_metric_report(ngx_metric_t *metric, int64_t value);
+//
+// Ignored off the main thread and before ngx_metrics_init.
+void ngx_metric_report(ngx_metric_e metric, int64_t value);
 
-#define NGX_CALL_HANDLER(handler, ...) do { ngx_span_t __span; ngx_metrics_span_enter(&__span, handler); (handler)(__VA_ARGS__); ngx_metrics_span_exit(&__span); } while(0)
+// Returns all metrics in the Prometheus text format, to be freed with ngx_metrics_free_result.
+// With `reset`, zeroes them afterwards.
+//
+// NULL off the main thread and before ngx_metrics_init.
+//
+// From a Lua handler:
+//   local ffi = require "ffi"
+//   ffi.cdef[[
+//     char *ngx_metrics_prometheus(int reset);
+//     void ngx_metrics_free_result(char *metrics);
+//   ]]
+//   local metrics = ffi.C.ngx_metrics_prometheus(1)
+//   if metrics == nil then return ngx.exit(ngx.HTTP_SERVICE_UNAVAILABLE) end
+//   ngx.print(ffi.string(ffi.gc(metrics, ffi.C.ngx_metrics_free_result)))
+//
+// TODO: serve metrics without Lua, from an nginx directive (e.g. with the ngx crate).
+char *ngx_metrics_prometheus(int reset);
+void ngx_metrics_free_result(char *metrics);
 
-typedef struct ngx_span_s {
-  struct ngx_span_s *parent;
-  void *handler;
-  int64_t start_wall_time;
-  int64_t children_wall_time;
-  int64_t start_cpu_time;
-  int64_t children_cpu_time;
-} ngx_span_t;
+// Calls `handler(...)` inside a span: see ngx_metrics_span_enter.
+#define NGX_CALL_HANDLER(handler, ...) do { ngx_metrics_span_enter(handler); (handler)(__VA_ARGS__); ngx_metrics_span_exit(); } while(0)
 
-void ngx_metrics_span_enter(ngx_span_t *span, void *handler);
-void ngx_metrics_span_exit(ngx_span_t *span);
+// Opens a span for `handler`: its wall and CPU time and call count are tracked until the matching
+// ngx_metrics_span_exit. Spans nest.
+//
+// Ignored off the main thread and before ngx_metrics_init.
+void ngx_metrics_span_enter(void *handler);
+// Closes the innermost open span.
+void ngx_metrics_span_exit(void);
 
 int64_t ngx_precise_time();
 

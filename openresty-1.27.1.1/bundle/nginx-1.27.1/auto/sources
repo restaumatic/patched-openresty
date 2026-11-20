@@ -79,7 +79,6 @@ CORE_SRCS="src/core/nginx.c \
            src/core/ngx_open_file_cache.c \
            src/core/ngx_crypt.c \
            src/core/ngx_proxy_protocol.c \
-           src/core/ngx_metrics.c \
            src/core/ngx_syslog.c"
 
 

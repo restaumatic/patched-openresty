@@ -11,10 +11,15 @@ Added a metrics system.
 
 The included metrics are:
 
-- `event_handler_time_ns`: Time spent in event handlers in the event loop
+- `any_event_handler_time_ns`: Time spent in each event handler call in the event loop
+- `event_handler_{total,self}_{wall,cpu}_time_ns{handler="<name>"}`: The same per handler, for handlers listed in `<nginx>.symbols` (from `generate-symbols`). Self time excludes nested handler calls.
 - `open_and_stat_file_time_ns`: Time spent in `ngx_open_and_stat_file` function
 - `event_loop_latency_ns`: Event loop iteration time (from `epoll_wait` return to next call to `epoll_wait`)
 
 The metrics can be read from Lua using FFI. There's no lua api provided here.
 
-See `ngx_metrics.h` and functions `ngx_get_num_metrics` and `ngx_get_metric`.
+See `ngx_metrics.h` and functions `ngx_metrics_prometheus` and `ngx_metrics_free_result`.
+
+Metrics are kept per worker process, and a read returns the numbers of the worker that served it, so they are meaningful only with `worker_processes 1`.
+
+The metrics code is in `openresty-1.27.1.1/ngx_metrics` (Rust). Nothing runs its checks automatically; after `./openresty-1.27.1.1/dev-make`, run `cargo test`, `cargo clippy --all-targets` and `cargo fmt --check` there, and `./test-metrics.py` here.
