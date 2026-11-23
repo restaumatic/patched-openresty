@@ -11,7 +11,7 @@ LABEL maintainer="Evan Wies <evan@neomantra.net>"
 # Docker Build Arguments
 ARG RESTY_IMAGE_BASE="ubuntu"
 ARG RESTY_IMAGE_TAG="jammy"
-ARG RESTY_VERSION="1.27.1.1"
+ARG RESTY_VERSION="1.31.9.1"
 ARG RESTY_LUAROCKS_VERSION="3.11.1"
 
 # https://github.com/openresty/openresty-packaging/blob/master/deb/openresty-openssl3/debian/rules
@@ -213,7 +213,7 @@ RUN cd ./openresty-${RESTY_VERSION} \
     && ln -sf /dev/stdout /usr/local/openresty/nginx/logs/access.log \
     && ln -sf /dev/stderr /usr/local/openresty/nginx/logs/error.log
 
-RUN ./openresty-1.27.1.1/generate-symbols $(realpath /usr/local/openresty/bin/openresty)
+RUN ./openresty-${RESTY_VERSION}/generate-symbols $(realpath /usr/local/openresty/bin/openresty)
 
 # Add additional binaries into PATH for convenience
 ENV PATH=$PATH:/usr/local/openresty/luajit/bin:/usr/local/openresty/nginx/sbin:/usr/local/openresty/bin

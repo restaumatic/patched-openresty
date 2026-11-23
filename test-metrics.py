@@ -16,7 +16,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-OPENRESTY = ROOT / "openresty-1.27.1.1"
+OPENRESTY = ROOT / "openresty-1.31.9.1"
 LUAJIT_LIB = OPENRESTY / "build/luajit-root/usr/local/openresty/luajit/lib"
 
 CONFIG = """
@@ -84,7 +84,7 @@ def run(nginx, workdir):
 
 
 def main():
-    nginx = Path(sys.argv[1] if len(sys.argv) > 1 else OPENRESTY / "build/nginx-1.27.1/objs/nginx").resolve()
+    nginx = Path(sys.argv[1] if len(sys.argv) > 1 else OPENRESTY / "build/nginx-1.31.9/objs/nginx").resolve()
     if LUAJIT_LIB.is_dir():
         os.environ["LD_LIBRARY_PATH"] = ":".join(filter(None, [str(LUAJIT_LIB), os.environ.get("LD_LIBRARY_PATH")]))
     if not Path(f"{nginx}.symbols").exists():
