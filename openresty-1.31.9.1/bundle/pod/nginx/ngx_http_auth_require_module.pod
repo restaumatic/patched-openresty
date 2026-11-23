@@ -1,0 +1,108 @@
+=encoding utf-8
+
+=head1 NAME
+
+ngx_http_auth_require_module - Module ngx_http_auth_require_module
+
+
+
+
+=head1
+
+
+
+The C<ngx_http_auth_require_module> module (1.29.0)
+implements variable-based client authorization.
+It can also use variables
+provided by other access modules such as
+L<ngx_http_auth_request_module|ngx_http_auth_request_module>
+or
+L<ngx_http_auth_oidc_module|ngx_http_auth_request_module>.
+
+
+
+
+
+
+B<NOTE>
+
+This module is available as part of our
+commercial subscription.
+
+
+
+
+
+=head1 Example Configuration
+
+
+
+
+    
+    http {
+        oidc_provider my_idp {
+            ...
+        }
+    
+        map $oidc_claim_role $admin_role {
+            "admin" 1;
+        }
+    
+        server {
+            auth_oidc my_idp;
+    
+            location /admin {
+                auth_require $admin_role;
+            }
+        }
+    }
+
+
+
+
+
+
+=head1 Directives
+
+=head2 auth_require
+
+
+B<syntax:> auth_require I<
+    I<C<$value>> ...
+    [C<error>=C<4xx> E<verbar>
+                              C<5xx>]
+>
+
+
+B<default:> I<off>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+B<context:> I<limit_except>
+
+
+
+
+
+Enables authorization based on the specified variables.
+The access is allowed only if all the variables are not
+empty and are not equal to “0”.
+Otherwise, the module returns C<403> code, which can be
+overridden by the C<error> parameter.
+Several C<auth_require> directives can be used to return
+different error codes.
+
+
+
+
+
+
+

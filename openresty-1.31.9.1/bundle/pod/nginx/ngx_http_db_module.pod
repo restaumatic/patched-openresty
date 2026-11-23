@@ -1,0 +1,1764 @@
+=encoding utf-8
+
+=head1 NAME
+
+ngx_http_db_module - Module ngx_http_db_module
+
+
+
+
+=head1
+
+
+
+The C<ngx_http_db_module> module (1.31.6) retrieves values
+for the specified key
+from a database
+and returns them as HTTP response bodies.
+The key can contain variables.
+Authentication and
+database selection are also supported.
+
+
+
+
+
+Currently, the module supports single-key lookups using the
+C<GET> command of Redis database over TCP or TLS.
+
+
+
+
+
+Lookup results can be cached in a
+L<shared memory zone|ngx_http_keyval_module>.
+Retrieved values can be used in variables.
+
+
+
+
+
+
+B<NOTE>
+
+This module is available as part of our
+commercial subscription.
+
+
+
+
+
+=head1 Example Configuration
+
+
+
+Redis authentication and database selection:
+
+    
+    upstream redis_backend {
+        server    127.0.0.1:6379;
+        keepalive 4;
+    
+        db_type redis;
+    }
+    
+    server {
+        ...
+        location = /lookup {
+                db_pass redis_backend;
+                db_name 3;
+                db_auth "secret";
+                db_get  $arg_key;
+        }
+    }
+
+
+
+
+
+
+
+Per-database lookup caching:
+
+    
+    keyval_zone zone=dbcache_db0:1m timeout=60s;
+    keyval_zone zone=dbcache_db1:1m timeout=60s;
+    
+    upstream redis_backend {
+        server    127.0.0.1:6379;
+        keepalive 4;
+    
+        db_type redis;
+    }
+    
+    server {
+        ...
+        location /db0 {
+            db_pass  redis_backend;
+            db_name  0;
+            db_get   $arg_key;
+            db_cache dbcache_db0;
+        }
+    
+        location /db1 {
+            db_pass  redis_backend;
+            db_name  1;
+            db_get   $arg_key;
+            db_cache dbcache_db1;
+        }
+    }
+
+
+
+
+
+
+
+Verified TLS and mutual TLS connection:
+
+    
+    location /db {
+        db_pass redis_backend;
+        db_get  $arg_key;
+    
+        db_ssl                     on;
+        db_ssl_verify              on;
+        db_ssl_trusted_certificate ca.crt;
+        db_ssl_name                localhost;
+    
+        db_ssl_certificate         client.crt;
+        db_ssl_certificate_key     client.key;
+    }
+
+
+
+
+
+
+
+Using database-backed variables, for example,
+retrieving a resource owner from Redis and adding it to a response header.
+
+    
+    location = /internal/db-get {
+        internal;
+        db_pass redis_backend;
+        db_get  $arg_key;
+    }
+    
+    location /resource {
+        db_var     $owner /internal/db-get "key=$arg_id" default=unknown;
+        add_header X-Owner $owner;
+        proxy_pass http://application;
+    }
+
+
+
+
+
+
+=head1 Directives
+
+=head2 db_auth
+
+
+B<syntax:> db_auth I<I<C<string>>>
+
+
+
+B<context:> I<location>
+
+
+B<context:> I<if in location>
+
+
+
+
+
+Specifies the password string
+used to authenticate connections to a database server.
+An empty value disables authentication.
+Authentication with a separate username and password arguments
+is not supported.
+
+    
+    location /db/ {
+        db_pass redis_backend;
+        db_auth secret;
+        db_get  $arg_key;
+    }
+
+
+
+
+
+
+
+For the Redis backend, the password is passed as a single argument
+to the C<AUTH> command.
+
+
+
+
+
+The directive is inherited from the previous configuration level
+if and only if there are no C<db_auth> directives
+defined on the current level.
+
+
+
+
+
+To protect the password, enable SSLE<sol>TLS connections to the database server
+using the L</db_ssl> directive.
+
+
+
+
+
+
+
+=head2 db_bind
+
+
+B<syntax:> db_bind I<
+    I<C<address>>
+    [C<transparent>] E<verbar>
+    C<off>>
+
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Makes outgoing connections to a database server originate
+from the specified local IP address with an optional port.
+Parameter value can contain variables.
+The special value C<off> cancels the effect
+of the C<db_bind> directive
+inherited from the previous configuration level, which allows the
+system to auto-assign the local IP address and port.
+Example:
+
+    
+    db_bind $server_addr;
+
+
+
+
+
+
+
+The C<transparent> parameter allows
+outgoing connections to a database server originate
+from a non-local IP address,
+for example, from a real IP address of a client:
+
+    
+    db_bind $remote_addr transparent;
+
+
+In order for this parameter to work,
+it is usually necessary to run nginx worker processes with the
+L<superuser|ngx_core_module> privileges.
+On Linux it is not required as if
+the C<transparent> parameter is specified, worker processes
+inherit the C<CAP_NET_RAW> capability from the master process.
+It is also necessary to configure kernel routing table
+to intercept network traffic from the database server.
+
+
+
+
+
+
+
+=head2 db_buffer_size
+
+
+B<syntax:> db_buffer_size I<I<C<size>>>
+
+
+B<default:> I<4kE<verbar>8k>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Sets the size of the buffer used for reading the database response.
+By default, the buffer size is equal to one memory page.
+This is either 4K or 8K, depending on a platform.
+It can be made smaller, however.
+
+
+
+
+
+The buffer is also used when parsing database protocol replies.
+A protocol reply header that does not fit in the buffer
+cannot be processed successfully.
+
+
+
+
+
+Database response bodies are processed without upstream response buffering.
+
+
+
+
+
+
+
+=head2 db_cache
+
+
+B<syntax:> db_cache I<
+    I<C<zone>>
+    [C<timeout>=I<C<time>>]
+    [C<max_size>=I<C<size>>]
+    [C<not_found>=C<on>E<verbar>C<off>E<verbar>I<C<time>>]
+>
+
+
+
+B<context:> I<location>
+
+
+B<context:> I<if in location>
+
+
+
+
+
+Enables caching of database lookup results in a shared memory zone
+defined by the
+L<ngx_http_keyval_module> directive.
+The cache key is the value of the L</db_get> directive,
+evaluated for the current request.
+If a cached result is found,
+it is returned without connecting to the database server.
+
+
+
+
+
+The L</db_pass> directive must be specified
+in the same configuration context.
+
+
+
+
+
+The following parameters are supported:
+
+=over
+
+
+
+=item 
+C<timeout>=I<C<time>>
+
+
+
+
+
+sets the lifetime of cached values.
+The parameter defaults to C<0>.
+A nonzero effective timeout should be configured using this parameter
+or the zone's C<timeout> parameter.
+With an effective timeout of zero, entries may be removed
+by unrelated writes to the zone.
+
+
+
+=item 
+C<max_size>=I<C<size>>
+
+
+
+
+
+sets the maximum value size eligible for caching.
+By default, the size is C<64k>.
+Values exceeding this limit are returned to the client but are not cached.
+
+
+
+=item 
+C<not_found>=C<off> E<verbar> C<on> E<verbar> C<time>
+
+
+
+
+
+Enables or disables caching of C<not found> results.
+By default, such results are not cached.
+The value C<on> uses the same timeout as for database values.
+A time value specifies a separate lifetime
+for C<not found> results.
+
+
+
+
+=back
+
+
+
+
+
+
+
+For example:
+
+    
+    http {
+        keyval_zone zone=db_cache:10m timeout=1m;
+    
+        upstream redis_backend {
+            db_type redis;
+            server  127.0.0.1:6379;
+        }
+    
+        server {
+            location /db/ {
+                db_pass redis_backend;
+                db_get  $arg_key;
+    
+                db_cache db_cache timeout=30s max_size=128k not_found=5s;
+            }
+        }
+    }
+
+
+
+
+
+
+
+The evaluated L</db_get> value is used as the cache key.
+A cached value is returned without contacting the database.
+A cached missing-key result returns
+C<404> (C<Not Found>)
+if missing-key caching is enabled in the current location.
+Otherwise, the database is queried.
+
+
+
+
+
+A zero-length value is a successful result and is distinct
+from a missing key.
+Only complete, valid successful responses are cached,
+together with missing-key results when enabled.
+Failed, malformed, or incomplete responses are not cached.
+
+
+
+
+
+Locations sharing a zone must have identical
+L</db_pass>, L</db_name>,
+and L</db_auth> settings.
+A cache zone must not also be used for ordinary keyval data.
+Missing-key caching cannot be combined with the
+C<not_found> parameter of
+L</db_next_upstream>.
+
+
+
+
+
+A cache lookup error returns
+C<500> (C<Internal Server Error>).
+Failure to insert a result into the cache does not affect the response.
+
+
+
+
+
+The directive is inherited from the previous configuration level
+unless overridden.
+
+
+
+
+
+
+B<NOTE>
+
+The module does not provide cache invalidation or purge.
+Database changes may remain invisible until cached entries expire
+or are evicted.
+Concurrent cache misses are not combined into a single database request.
+
+
+
+
+
+
+
+
+=head2 db_connect_timeout
+
+
+B<syntax:> db_connect_timeout I<I<C<time>>>
+
+
+B<default:> I<60s>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Defines a timeout for establishing a connection with a database server.
+It should be noted that this timeout cannot usually exceed 75 seconds.
+
+
+
+
+
+
+
+=head2 db_get
+
+
+B<syntax:> db_get I<I<C<key>>>
+
+
+
+B<context:> I<location>
+
+
+B<context:> I<if in location>
+
+
+
+
+
+Specifies the key to retrieve from the database.
+The key can contain text, variables, and their combination.
+An empty key is not allowed.
+
+
+
+
+
+For the Redis backend, the key is passed to the C<GET> command.
+A successful lookup returns the value as the response body.
+
+    
+    upstream redis_backend {
+        db_type redis;
+        server  127.0.0.1:6379;
+    }
+    
+    server {
+        location /db/ {
+            db_pass redis_backend;
+            db_get  "user:$arg_id";
+        }
+    }
+
+
+
+
+
+
+
+If caching is enabled,
+the evaluated key is also used as the cache key.
+
+
+
+
+
+
+
+=head2 db_name
+
+
+B<syntax:> db_name I<I<C<string>>>
+
+
+
+B<context:> I<location>
+
+
+B<context:> I<if in location>
+
+
+
+
+
+Sets the database to use for lookup requests.
+
+
+
+
+
+For the Redis backend, the parameter specifies the database index
+passed to the C<SELECT> command. 
+If the directive is not specified or its value is empty,
+database C<0> is used:
+
+    
+    location /db/ {
+        db_pass redis_backend;
+        db_name 3;
+        db_get  $arg_key;
+    }
+
+
+
+
+
+
+
+
+
+=head2 db_next_upstream
+
+
+B<syntax:> db_next_upstream I<
+    C<error> E<verbar>
+    C<timeout> E<verbar>
+    C<invalid_response> E<verbar>
+    C<not_found>
+    C<off>
+    ...>
+
+
+B<syntax:> db_next_upstream I<C<off>>
+
+
+B<default:> I<error timeout>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Specifies the conditions under which a request can be passed
+to the next database server:
+
+=over
+
+
+
+=item C<error>
+
+
+
+an error occurred while establishing a connection with the
+server, passing a request to it, or reading the response header;
+
+
+=item C<timeout>
+
+
+
+a timeout has occurred while establishing a connection with the
+server, passing a request to it, or reading the response header;
+
+
+=item C<invalid_response>
+
+
+
+
+server returned an invalid response.
+For the Redis backend, this also includes Redis error replies, such as
+authentication failures or key-value mismatch errors;
+
+
+
+=item C<not_found>
+
+
+
+
+the requested key was not found.
+For the Redis backend, this corresponds to a nil reply
+to the C<GET> command;
+
+
+
+B<NOTE>
+
+The  parameter cannot be used when caching of
+C<not_found> results is enabled with the
+L</db_cache> directive.
+
+
+
+
+
+
+=item C<off>
+
+
+
+
+disables passing a request to the next server.
+
+
+
+
+=back
+
+
+
+
+
+
+
+One should bear in mind that passing a request to the next server is
+only possible if nothing has been sent to a client yet.
+That is, if an error or timeout occurs in the middle of the
+transferring of a response, fixing this is impossible.
+
+
+
+
+
+The directive also defines what is considered an
+L<unsuccessful
+attempt|ngx_http_upstream_module> of communication with a server.
+The cases of C<error> and C<timeout>,
+are always considered unsuccessful attempts,
+even if they are not specified in the directive.
+The case of C<invalid_response> is
+considered an unsuccessful attempt only if it is specified in the directive.
+The case of C<not_found>
+is never considered an unsuccessful attempt.
+
+
+
+
+
+Passing a request to the next server can be limited by
+the number of tries
+and by time.
+
+
+
+
+
+The C<not_found> parameter cannot be combined
+with enabled missing-key caching in L</db_cache>.
+
+
+
+
+
+
+
+=head2 db_next_upstream_timeout
+
+
+B<syntax:> db_next_upstream_timeout I<I<C<time>>>
+
+
+B<default:> I<0>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Limits the time during which a request can be passed to the
+next server.
+The C<0> value turns off this limitation.
+
+
+
+
+
+
+
+=head2 db_next_upstream_tries
+
+
+B<syntax:> db_next_upstream_tries I<I<C<number>>>
+
+
+B<default:> I<0>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Limits the number of possible tries for passing a request to the
+next server.
+The limit includes the initial attempt.
+The C<0> value turns off this limitation.
+
+
+
+
+
+
+
+=head2 db_pass
+
+
+B<syntax:> db_pass I<I<C<name>>>
+
+
+
+B<context:> I<location>
+
+
+B<context:> I<if in location>
+
+
+
+
+
+Specifies the upstream group used for database lookups:
+
+    
+    db_pass redis_backend;
+
+
+The group must be configured with L</db_type>.
+A server address cannot be specified directly.
+
+
+
+
+
+The L</db_get> directive must also be configured,
+either in the current configuration or inherited from a parent location.
+
+
+
+
+
+Only C<GET> and C<HEAD> requests
+are accepted.
+Other methods return
+C<405> (C<Method Not Allowed>).
+The client request body is discarded.
+Client headers and the request body are not forwarded to the database.
+
+
+
+
+
+The response content type is determined by the
+L<ngx_http_core_module> and
+L<ngx_http_core_module>
+directives.
+
+
+
+
+
+
+
+=head2 db_read_timeout
+
+
+B<syntax:> db_read_timeout I<I<C<time>>>
+
+
+B<default:> I<60s>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Defines a timeout for reading data from a database server.
+The timeout is set only between two successive read operations,
+not for the transmission of the whole response.
+If the database server does not transmit anything within this time,
+the connection is closed.
+
+
+
+
+
+
+
+=head2 db_send_timeout
+
+
+B<syntax:> db_send_timeout I<I<C<time>>>
+
+
+B<default:> I<60s>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Defines a timeout for sending data to a database server.
+
+
+
+
+
+
+
+=head2 db_socket_keepalive
+
+
+B<syntax:> db_socket_keepalive I<C<on> E<verbar> C<off>>
+
+
+B<default:> I<off>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Configures the “TCP keepalive” behavior
+for outgoing connections to a database server.
+If enabled, the C<SO_KEEPALIVE> socket option is turned on.
+
+
+
+
+
+
+This is distinct from caching idle upstream connections,
+which is configured using the
+L<ngx_http_upstream_module> directive.
+
+
+
+
+
+
+
+=head2 db_ssl
+
+
+B<syntax:> db_ssl I<C<on> E<verbar> C<off>>
+
+
+B<default:> I<off>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Enables TLS for connections to database servers.
+
+
+
+
+
+
+B<NOTE>
+
+Server certificate verification is disabled by default.
+Verification is configured separately by
+L</db_ssl_verify>.
+
+
+
+
+
+
+
+
+=head2 db_ssl_certificate
+
+
+B<syntax:> db_ssl_certificate I<I<C<file>>>
+
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Specifies a I<C<file>> with the certificate in the PEM format
+used for authentication to a database server.
+The corresponding L</db_ssl_certificate_key>
+must also be configured.
+
+
+
+
+
+The parameter value can contain variables:
+
+    
+    db_ssl_certificate /etc/nginx/client-certs/$host.crt;
+
+
+
+
+
+
+
+
+
+=head2 db_ssl_certificate_cache
+
+
+B<syntax:> db_ssl_certificate_cache I<C<off>>
+
+
+B<syntax:> db_ssl_certificate_cache I<
+    C<max>=I<C<number>>
+    [C<inactive>=I<C<time>>]
+    [C<valid>=I<C<time>>]
+>
+
+
+B<default:> I<off>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Defines a cache that stores
+SSL certificates and
+secret keys
+specified with variables.
+
+
+
+
+
+The directive has the following parameters:
+
+=over
+
+
+
+=item 
+C<max>
+
+
+
+
+
+sets the maximum number of elements in the cache;
+on cache overflow the least recently used (LRU) elements are removed;
+
+
+
+=item 
+C<inactive>
+
+
+
+
+
+defines a time after which an element is removed from the cache
+if it has not been accessed during this time;
+by default, it is 10 seconds;
+
+
+
+=item 
+C<valid>
+
+
+
+
+
+defines a time during which
+an element in the cache is considered valid
+and can be reused;
+by default, it is 60 seconds.
+Certificates that exceed this time will be reloaded or revalidated;
+
+
+
+=item 
+C<off>
+
+
+
+
+
+disables the cache.
+
+
+
+
+=back
+
+
+
+
+
+
+
+Example:
+
+    
+    db_ssl_certificate_cache max=1000 inactive=20s valid=1m;
+
+
+
+
+
+
+
+
+
+=head2 db_ssl_certificate_key
+
+
+B<syntax:> db_ssl_certificate_key I<I<C<file>>>
+
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Specifies a I<C<file>> with the secret key in the PEM format
+for the certificate configured by the
+L</db_ssl_certificate> directive.
+
+
+
+
+
+The parameter value can contain variables:
+
+    
+    db_ssl_certificate_key /etc/nginx/client-certs/$host.key;
+
+
+
+
+
+
+
+
+
+=head2 db_ssl_ciphers
+
+
+B<syntax:> db_ssl_ciphers I<I<C<ciphers>>>
+
+
+B<default:> I<DEFAULT>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Specifies the enabled ciphers for connections to database servers.
+The ciphers are specified in the format understood by the OpenSSL library.
+
+
+
+
+
+
+
+=head2 db_ssl_conf_command
+
+
+B<syntax:> db_ssl_conf_command I<I<C<name>> I<C<value>>>
+
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Sets arbitrary OpenSSL configuration
+L<commands|https://www.openssl.org/docs/man1.1.1/man3/SSL_CONF_cmd.html>
+when establishing a connection with the database server.
+
+
+
+
+
+Several C<db_ssl_conf_command> directives
+can be specified on the same level.
+These directives are inherited from the previous configuration level
+if and only if there are
+no C<db_ssl_conf_command> directives
+defined on the current level.
+
+
+
+
+
+
+B<NOTE>
+
+Note that configuring OpenSSL directly
+might result in unexpected behavior.
+
+
+
+
+
+
+
+
+=head2 db_ssl_crl
+
+
+B<syntax:> db_ssl_crl I<I<C<file>>>
+
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Specifies a I<C<file>> with revoked certificates (CRL)
+in the PEM format used to verify
+the certificate of the database server.
+When using intermediate certificates, their CRLs should be
+specified in the same file.
+
+
+
+
+
+
+
+=head2 db_ssl_key_log
+
+
+B<syntax:> db_ssl_key_log I<I<C<file>>>
+
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Enables logging of database server connection SSL keys
+and specifies the path to the key log file.
+Keys are logged in the
+L<SSLKEYLOGFILE|https://datatracker.ietf.org/doc/html/rfc9850>
+format compatible with Wireshark.
+
+
+
+
+
+
+B<NOTE>
+
+TLS key logs contain sensitive material that can enable decryption
+of captured traffic.
+Protect these files and enable logging only when needed.
+
+
+
+
+
+
+
+
+=head2 db_ssl_name
+
+
+B<syntax:> db_ssl_name I<I<C<name>>>
+
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Allows overriding the server name used to
+verify
+the database server certificate and to be
+passed through SNI
+when establishing a connection with the database server.
+
+
+
+
+
+
+
+=head2 db_ssl_password_file
+
+
+B<syntax:> db_ssl_password_file I<I<C<file>>>
+
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Specifies a I<C<file>> with passphrases for
+secret keys
+where each passphrase is specified on a separate line.
+Passphrases are tried in turn when loading the key.
+
+
+
+
+
+
+
+=head2 db_ssl_protocols
+
+
+B<syntax:> db_ssl_protocols I<
+    [C<SSLv2>]
+    [C<SSLv3>]
+    [C<TLSv1>]
+    [C<TLSv1.1>]
+    [C<TLSv1.2>]
+    [C<TLSv1.3>]>
+
+
+B<default:> I<TLSv1.2 TLSv1.3>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Enables the specified protocols for connections to database servers.
+
+
+
+
+
+
+
+=head2 db_ssl_server_name
+
+
+B<syntax:> db_ssl_server_name I<C<on> E<verbar> C<off>>
+
+
+B<default:> I<off>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Enables or disables passing of the
+server name through
+L<TLS
+Server Name Indication extension|http://en.wikipedia.org/wiki/Server_Name_Indication> (SNI, RFC 6066)
+when establishing a connection with the database server.
+
+
+
+
+
+
+
+=head2 db_ssl_session_reuse
+
+
+B<syntax:> db_ssl_session_reuse I<C<on> E<verbar> C<off>>
+
+
+B<default:> I<on>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Determines whether SSL sessions can be reused when working with
+the database server.
+If the errors
+“C<digest check failed>”
+appear in the logs, try disabling session reuse.
+
+
+
+
+
+
+
+=head2 db_ssl_trusted_certificate
+
+
+B<syntax:> db_ssl_trusted_certificate I<I<C<file>>>
+
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Specifies a I<C<file>> with trusted CA certificates in the PEM format
+used to verify
+the certificate of the database server.
+
+
+
+
+
+
+
+=head2 db_ssl_verify
+
+
+B<syntax:> db_ssl_verify I<C<on> E<verbar> C<off>>
+
+
+B<default:> I<off>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Enables or disables verification of the database server certificate.
+The L</db_ssl_trusted_certificate> directive
+must also be configured.
+The directive is required when L</db_ssl_verify> is enabled.
+
+
+
+
+
+
+
+=head2 db_ssl_verify_depth
+
+
+B<syntax:> db_ssl_verify_depth I<I<C<number>>>
+
+
+B<default:> I<1>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Sets the verification depth in the database server certificate chain.
+The directive is required when L</db_ssl_verify> is enabled.
+
+
+
+
+
+
+
+=head2 db_type
+
+
+B<syntax:> db_type I<I<C<type>>>
+
+
+
+B<context:> I<upstream>
+
+
+
+
+
+Sets the database protocol used by the upstream group.
+Currently, only C<redis> is supported:
+
+    
+    upstream redis_backend {
+        server  127.0.0.1:6379;
+        db_type redis;
+    }
+
+
+The protocol name is case-insensitive.
+
+
+
+
+
+
+
+=head2 db_var
+
+
+B<syntax:> db_var I<
+    I<C<$variable>>
+    C<location>=I<C<URI>>
+    C<query>=I<C<string>>
+    [C<default>=I<C<string>>]>
+
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+B<context:> I<if in location>
+
+
+
+
+
+Creates a variable whose value is obtained
+from the response body of a subrequest.
+The C<location> parameter sets the subrequest URI.
+The C<query> parameter sets its query string.
+An empty query string can be specified explicitly:
+
+    
+    db_var $configuration /_configuration "";
+
+
+The parameter values can contain text, variables, and their combination.
+
+
+
+
+
+If the subrequest returns the C<200> (C<OK>),
+its response body is assigned to the variable.
+An empty response body is a valid value.
+
+
+
+
+
+If the subrequest returns the C<404> (C<Not Found>),
+the value specified by the C<default> parameter
+is assigned to the variable.
+The parameter value can contain variables.
+If no C<default> parameter is specified,
+the variable is marked as not found.
+
+
+
+
+
+Variables are populated during the pre-access phase, not when first evaluated.
+They should be consumed in subsequent processing phases,
+such as access or content processing.
+Reading them earlier, for example in rewrite-phase
+L<ngx_http_rewrite_module>,
+L<ngx_http_rewrite_module>, or
+L<ngx_http_rewrite_module> processing,
+does not initiate a lookup.
+
+
+
+
+
+
+

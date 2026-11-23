@@ -1,0 +1,256 @@
+=encoding utf-8
+
+
+=head1 Name
+
+
+quic - Support for QUIC and HTTP/3
+
+
+=head1
+
+
+
+Support for
+L<QUIC|https://datatracker.ietf.org/doc/html/rfc9000>
+and
+L<HTTPE<sol>3|https://datatracker.ietf.org/doc/html/rfc9114>
+protocols is available since 1.25.0, it is included in
+Linux L<binary packages|linux_packages>.
+Please refer to the
+L<ngx_http_v3_module|ngx_http_v3_module>
+documentation.
+
+
+
+
+=head1 Building from sources
+
+
+
+The build is configured using the C<configure> command.
+Please refer to L<configure> for details.
+
+
+
+
+
+The L<OpenSSL|https://openssl.org> library
+version 3.5.1 or higher is recommended to build nginx with QUIC support.
+Otherwise, the L<OpenSSL|https://openssl.org>
+compatibility layer will be used that does not support
+L<early data|ngx_http_ssl_module>.
+Alternatively,
+L<BoringSSL|https://boringssl.googlesource.com/boringssl>,
+L<LibreSSL|https://www.libressl.org>, or
+L<QuicTLS|https://github.com/quictls/openssl>
+prebuilt libraries can be used.
+
+
+
+
+
+Use the following command to configure nginx with
+L<BoringSSL|https://boringssl.googlesource.com/boringssl>:
+
+    
+    ./configure
+        --with-debug
+        --with-http_v3_module
+        --with-cc-opt="-I../boringssl/include"
+        --with-ld-opt="-L../boringssl/build -lstdc++"
+
+
+
+
+
+
+
+Alternatively, nginx can be configured with
+L<QuicTLS|https://github.com/quictls/openssl>:
+
+    
+    ./configure
+        --with-debug
+        --with-http_v3_module
+        --with-cc-opt="-I../quictls/build/include"
+        --with-ld-opt="-L../quictls/build/lib"
+
+
+
+
+
+
+
+Alternatively, nginx can be configured with
+L<LibreSSL|https://www.libressl.org>:
+
+    
+    ./configure
+        --with-debug
+        --with-http_v3_module
+        --with-cc-opt="-I../libressl/build/include"
+        --with-ld-opt="-L../libressl/build/lib"
+
+
+
+
+
+
+
+After configuration,
+nginx is compiled and installed using C<make>.
+
+
+
+
+=head1 Configuration tips
+
+
+
+The L<ngx_http_core_module> directive in
+L<ngx_http_core_module|ngx_http_core_module>
+module got a new parameter
+L<quic|ngx_http_core_module>
+which enables HTTPE<sol>3 over QUIC on the specified port.
+
+
+
+
+
+Along with the C<quic> parameter
+it is also possible to specify the
+L<reuseport|ngx_http_core_module>
+parameter to make it work properly with multiple workers.
+
+
+
+
+
+To L<enable|ngx_http_v3_module>
+address validation:
+
+    
+    quic_retry on;
+
+
+
+To L<enable|ngx_http_ssl_module>
+0-RTT:
+
+    
+    ssl_early_data on;
+
+
+
+To L<enable|ngx_http_v3_module>
+GSO (Generic Segmentation Offloading):
+
+    
+    quic_gso on;
+
+
+
+To L<set|ngx_http_v3_module>
+host key for various tokens:
+
+    
+    quic_host_key <filename>;
+
+
+
+
+
+
+
+QUIC requires TLSv1.3 protocol version which is enabled by default
+in the L<ngx_http_ssl_module> directive.
+
+
+
+
+
+By default,
+L<GSO Linux-specific optimization|http://vger.kernel.org/lpc_net2018_talks/willemdebruijn-lpc2018-udpgso-paper-DRAFT-1.pdf>
+is disabled.
+Enable it in case a corresponding network interface is configured
+to support GSO.
+
+
+
+
+=head1 Troubleshooting
+
+
+
+Tips that may help to identify problems:
+
+=over
+
+
+
+
+=item *
+
+Ensure nginx is built with the proper SSL library.
+
+
+
+=item *
+
+Ensure nginx is using the proper SSL library in runtime
+(the C<nginx -V> shows what it is currently used).
+
+
+
+=item *
+
+Ensure a client is actually sending requests over QUIC.
+It is recommended to start with a simple console client such as
+L<ngtcp2|https://nghttp2.org/ngtcp2>
+to ensure the server is configured properly before trying
+with real browsers that may be quite picky with certificates.
+
+
+
+=item *
+
+Build nginx with L<debug support|debugging_log>
+and check the debug log.
+It should contain all details about the connection and why it failed.
+All related messages contain the “C<quic>” prefix
+and can be easily filtered out.
+
+
+
+=item *
+
+For a deeper investigation, additional debugging can be enabled
+using the following macros:
+C<NGX_QUIC_DEBUG_PACKETS>,
+C<NGX_QUIC_DEBUG_FRAMES>,
+C<NGX_QUIC_DEBUG_ALLOC>,
+C<NGX_QUIC_DEBUG_CRYPTO>.
+
+
+
+
+    
+    ./configure
+        --with-http_v3_module
+        --with-debug
+        --with-cc-opt="-DNGX_QUIC_DEBUG_PACKETS -DNGX_QUIC_DEBUG_CRYPTO"
+
+
+
+
+
+
+
+=back
+
+
+
+
+
+

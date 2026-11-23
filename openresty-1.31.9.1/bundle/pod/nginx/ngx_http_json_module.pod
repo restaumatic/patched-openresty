@@ -1,0 +1,165 @@
+=encoding utf-8
+
+=head1 NAME
+
+ngx_http_json_module - Module ngx_http_json_module
+
+
+
+
+=head1
+
+
+
+The C<ngx_http_json_module> module (1.31.5)
+extracts values from a JSON document stored in a variable
+and makes them available as variables.
+
+
+
+
+
+A document is parsed only once per request, no matter how many
+variables are extracted from it.
+Parsing is performed on the first access to any of these variables.
+
+
+
+
+
+This module is not built by default, it should be enabled with the
+C<--with-http_json_module>
+configuration parameter.
+
+
+
+
+=head1 Example Configuration
+
+
+
+
+    
+    http {
+        json_set $user_name $arg_data user.name;
+        json_set $user_age  $arg_data user.age;
+        json_set $tag0      $arg_data tags[0];
+    
+        server {
+            listen 8080;
+    
+            location / {
+                return 200 "name=$user_name age=$user_age tag0=$tag0\n";
+            }
+        }
+    }
+
+
+
+
+
+
+=head1 Directives
+
+=head2 json_max_depth
+
+
+B<syntax:> json_max_depth I<I<C<number>>>
+
+
+B<default:> I<32>
+
+
+B<context:> I<http>
+
+
+
+
+
+Sets the maximum nesting depth of JSON documents.
+A document nested deeper is considered invalid.
+Acceptable values are in the range from 1 to 256.
+
+
+
+
+
+
+
+=head2 json_set
+
+
+B<syntax:> json_set I<
+    I<C<$variable>>
+    I<C<$source>>
+    I<C<path>>>
+
+
+
+B<context:> I<http>
+
+
+
+
+
+Sets the I<C<variable>> to the value extracted from
+the JSON document held in the I<C<source>> variable
+at the given I<C<path>>.
+
+
+
+
+
+In a path, object members are separated by a dot,
+and array elements are addressed by a zero-based index in square
+brackets:
+
+    
+    client_body_early_read on;
+    
+    json_set $req_id     $request_body request.id;
+    json_set $enabled    $request_body settings.enabled;
+    json_set $first_item $request_body items[0];
+
+
+A member name that is empty or contains
+“C<.>”,
+“C<[>”, or
+“C<]>”
+is written as a JSON string in square brackets.
+Since such a path contains double quotes, the whole argument
+needs to be quoted in the configuration file:
+
+    
+    json_set $domain $request_body '["a.b.com"]';
+    json_set $nested $request_body 'obj["a.b"].c[2]';
+
+
+
+
+
+
+
+The value of a JSON string is stored unescaped.
+The values of numbers, booleans, and C<null>
+are stored as they appear in the document.
+If the path addresses an object or an array,
+its whole text is stored, including the enclosing
+braces or brackets.
+
+
+
+
+
+If the addressed member or element is absent, the variable is
+not found.
+If the I<C<source>> variable is empty or not found,
+or if its value is not a valid, complete JSON document,
+then all variables extracted from this source are not found.
+
+
+
+
+
+
+

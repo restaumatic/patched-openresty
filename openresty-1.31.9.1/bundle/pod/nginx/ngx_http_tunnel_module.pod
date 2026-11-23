@@ -1,0 +1,729 @@
+=encoding utf-8
+
+=head1 NAME
+
+ngx_http_tunnel_module - Module ngx_http_tunnel_module
+
+
+
+
+=head1
+
+
+
+The C<ngx_http_tunnel_module> (1.31.0) handles HTTPE<sol>1.1
+L<CONNECT|https://datatracker.ietf.org/doc/html/rfc9110#section-9.3.6>
+requests and establishes an end-to-end virtual connection.
+
+
+
+
+=head1 Example Configuration
+
+
+
+
+    
+    http {
+    
+        map $request_port $allow_port {
+            443            1;
+        }
+    
+        map $host $allow_host {
+            hostnames;
+    
+            example.org    1;
+            *.example.org  1;
+        }
+    
+        server {
+            listen 8000;
+    
+            resolver dns.example.com;
+    
+            if ($allow_port != 1) {
+                return 502;
+            }
+    
+            if ($allow_host != 1) {
+                return 502;
+            }
+    
+            tunnel_pass;
+        }
+    }
+
+
+
+
+
+
+=head1 Directives
+
+=head2 tunnel_allow_upstream
+
+
+B<syntax:> tunnel_allow_upstream I<I<C<string>> ...>
+
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Defines conditions under which access to the backend server
+is allowed or denied.
+If all string parameters are not empty
+and not equal to “0” then the access is allowed.
+The conditions are evaluated each time
+before a connection to a backend server is established.
+Parameter values can contain variables:
+
+    
+    geo $upstream_last_addr $allow {
+        volatile;
+        10.10.0.0/24        1;
+    }
+    
+    server {
+        listen 127.0.0.1:8080;
+    
+        tunnel_pass;
+        tunnel_allow_upstream $allow;
+    }
+
+
+
+
+
+
+
+
+B<NOTE>
+
+This directive is available as part of our
+commercial subscription.
+
+
+
+
+
+
+
+
+=head2 tunnel_bind
+
+
+B<syntax:> tunnel_bind I<
+    I<C<address>> E<verbar>
+    C<off>>
+
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Makes outgoing connections to a backend server originate
+from the specified local IP address with an optional port.
+Parameter value can contain variables.
+The special value C<off> cancels the effect
+of the C<tunnel_bind> directive
+inherited from the previous configuration level, which allows the
+system to auto-assign the local IP address and port.
+
+
+
+
+
+
+
+=head2 tunnel_bind_dynamic
+
+
+B<syntax:> tunnel_bind_dynamic I<C<on> E<verbar> C<off>>
+
+
+B<default:> I<off>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+When enabled, makes the L</tunnel_bind> operation
+at each connection attempt:
+
+    
+    geo $upstream_last_addr $bind_addr {
+        volatile;
+        10.0.0.0/24    10.0.0.1;
+        192.168.0.0/24  192.168.0.1;
+    }
+    
+    tunnel_bind         $bind_addr;
+    tunnel_bind_dynamic on;
+
+
+
+
+
+
+
+
+B<NOTE>
+
+This directive is available as part of our
+commercial subscription.
+
+
+
+
+
+
+
+
+=head2 tunnel_buffer_size
+
+
+B<syntax:> tunnel_buffer_size I<I<C<size>>>
+
+
+B<default:> I<16k>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Sets the I<C<size>> of the buffer used for reading data
+from the backend server.
+Also sets the I<C<size>> of the buffer used for reading data
+from the client.
+
+
+
+
+
+
+
+=head2 tunnel_connect_timeout
+
+
+B<syntax:> tunnel_connect_timeout I<I<C<time>>>
+
+
+B<default:> I<60s>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Defines a timeout for establishing a connection with a backend server.
+It should be noted that this timeout cannot usually exceed 75 seconds.
+
+
+
+
+
+
+
+=head2 tunnel_next_upstream
+
+
+B<syntax:> tunnel_next_upstream I<
+    C<error> E<verbar>
+    C<timeout> E<verbar>
+    C<denied> E<verbar>
+    C<off>
+    ...>
+
+
+B<default:> I<error timeout>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Specifies in which cases a request should be passed to the next server:
+
+=over
+
+
+
+=item C<error>
+
+
+
+an error occurred while establishing a connection with the
+server or reading data from the server;
+
+
+=item C<timeout>
+
+
+
+a timeout has occurred while establishing a connection with the
+server, passing a request to it, or reading data from the server;
+
+
+=item C<denied>
+
+
+
+the server denied
+the connection;
+
+
+
+B<NOTE>
+
+This parameter is available as part of our
+commercial subscription.
+
+
+
+
+
+
+=item C<off>
+
+
+
+disables passing a request to the next server.
+
+
+
+=back
+
+
+
+
+
+
+
+One should bear in mind that passing a request to the next server is
+only possible if nothing has been sent to a client yet.
+That is, if an error or timeout occurs in the middle of the
+transferring of a response, fixing this is impossible.
+
+
+
+
+
+The directive also defines what is considered an
+L<unsuccessful
+attempt|ngx_http_upstream_module> of communication with a server.
+The cases of C<error>, C<timeout>,
+and C<denied>
+are always considered unsuccessful attempts,
+even if they are not specified in the directive.
+
+
+
+
+
+Passing a request to the next server can be limited by
+the number of tries
+and by time.
+
+
+
+
+
+
+
+=head2 tunnel_next_upstream_timeout
+
+
+B<syntax:> tunnel_next_upstream_timeout I<I<C<time>>>
+
+
+B<default:> I<0>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Limits the time during which a request can be passed to the
+next server.
+The C<0> value turns off this limitation.
+
+
+
+
+
+
+
+=head2 tunnel_next_upstream_tries
+
+
+B<syntax:> tunnel_next_upstream_tries I<I<C<number>>>
+
+
+B<default:> I<0>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Limits the number of possible tries for passing a request to the
+next server.
+The C<0> value turns off this limitation.
+
+
+
+
+
+
+
+=head2 tunnel_pass
+
+
+B<syntax:> tunnel_pass I<[I<C<address>>]>
+
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+B<context:> I<if in location>
+
+
+
+
+
+Enables handling of CONNECT requests and sets the address of a backend server.
+By default, the C<address> is
+I<C<$host:$request_port>> and is taken from the client request.
+In most cases, C<tunnel_pass> does not require
+configuring any arguments.
+
+
+
+
+
+The address can be specified as a domain name or IP address,
+and a port:
+
+    
+    tunnel_pass localhost:9000;
+
+
+or as a UNIX-domain socket path:
+
+    
+    tunnel_pass unix:/tmp/backend.socket;
+
+
+
+
+
+
+
+If a domain name resolves to several addresses, all of them will be
+used in a round-robin fashion.
+In addition, an address can be specified as a
+L<server group|ngx_http_upstream_module>.
+
+
+
+
+
+Parameter value can contain variables.
+In this case, if an address is specified as a domain name,
+the name is searched among the described
+L<server groups|ngx_http_upstream_module>,
+and, if not found, is determined using a
+L<ngx_http_core_module>.
+
+
+
+
+
+
+
+=head2 tunnel_read_timeout
+
+
+B<syntax:> tunnel_read_timeout I<I<C<time>>>
+
+
+B<default:> I<60s>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Sets the timeout between two successive read or write operations
+on client or backend server connections. 
+If no data is transmitted within this time, the connection is closed.
+
+
+
+
+
+
+
+=head2 tunnel_send_lowat
+
+
+B<syntax:> tunnel_send_lowat I<I<C<size>>>
+
+
+B<default:> I<0>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+If the directive is set to a non-zero value, nginx will try to
+minimize the number
+of send operations on outgoing connections to a backend server by using either
+C<NOTE_LOWAT> flag of the
+L<events> method,
+or the C<SO_SNDLOWAT> socket option,
+with the specified I<C<size>>.
+
+
+
+
+
+This directive is ignored on Linux, Solaris, and Windows.
+
+
+
+
+
+
+
+=head2 tunnel_send_timeout
+
+
+B<syntax:> tunnel_send_timeout I<I<C<time>>>
+
+
+B<default:> I<60s>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Sets a timeout for transmitting a request to the backend server.
+The timeout is set only between two successive write operations,
+not for the transmission of the whole request.
+If the backend server does not receive anything within this time,
+the connection is closed.
+
+
+
+
+
+
+
+=head2 tunnel_socket_keepalive
+
+
+B<syntax:> tunnel_socket_keepalive I<C<on> E<verbar> C<off>>
+
+
+B<default:> I<off>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Configures the “TCP keepalive” behavior
+for outgoing connections to a backend server.
+By default, the operating system’s settings are in effect for the socket.
+If the directive is set to the value “C<on>”, the
+C<SO_KEEPALIVE> socket option is turned on for the socket.
+
+
+
+
+
+
+
+=head2 tunnel_socket_rcvbuf
+
+
+B<syntax:> tunnel_socket_rcvbuf I<I<C<size>>>
+
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+This directive appeared in version 1.31.3.
+
+
+
+
+
+Sets the receive buffer size
+(the C<SO_RCVBUF> option)
+for outgoing connections to a backend server.
+The special value C<0> cancels the effect
+of the C<tunnel_socket_rcvbuf> directive
+inherited from the previous configuration level, which allows
+keeping the operating system’s settings in effect for the socket.
+
+
+
+
+
+
+
+=head2 tunnel_socket_sndbuf
+
+
+B<syntax:> tunnel_socket_sndbuf I<I<C<size>>>
+
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+This directive appeared in version 1.31.3.
+
+
+
+
+
+Sets the send buffer size
+(the C<SO_SNDBUF> option)
+for outgoing connections to a backend server.
+The special value C<0> cancels the effect
+of the C<tunnel_socket_sndbuf> directive
+inherited from the previous configuration level, which allows
+keeping the operating system’s settings in effect for the socket.
+
+
+
+
+
+
+

@@ -1,0 +1,1392 @@
+local ffi = require "ffi"
+local C = ffi.C
+local ffi_gc = ffi.gc
+local ffi_new = ffi.new
+local ffi_str = ffi.string
+local ffi_cast = ffi.cast
+local ffi_copy = ffi.copy
+
+local rsa_macro = require "resty.openssl.include.rsa"
+local dh_macro = require "resty.openssl.include.dh"
+require "resty.openssl.include.bio"
+require "resty.openssl.include.pem"
+require "resty.openssl.include.x509"
+require "resty.openssl.include.evp.pkey"
+local evp_macro = require "resty.openssl.include.evp"
+local pkey_macro = require "resty.openssl.include.evp.pkey"
+local bio_util = require "resty.openssl.auxiliary.bio"
+local digest_lib = require "resty.openssl.digest"
+local rsa_lib = require "resty.openssl.rsa"
+local dh_lib = require "resty.openssl.dh"
+local ec_lib = require "resty.openssl.ec"
+local ecx_lib = require "resty.openssl.ecx"
+local objects_lib = require "resty.openssl.objects"
+local jwk_lib = require "resty.openssl.auxiliary.jwk"
+local ctx_lib = require "resty.openssl.ctx"
+local ctypes = require "resty.openssl.auxiliary.ctypes"
+local ecdsa_util = require "resty.openssl.auxiliary.ecdsa"
+local format_error = require("resty.openssl.err").format_error
+local log_warn = require "resty.openssl.auxiliary.compat".log_warn
+local log_debug = require "resty.openssl.auxiliary.compat".log_debug
+
+local OPENSSL_3_UP = require("resty.openssl.version").OPENSSL_3_UP
+local provider_key_lib = OPENSSL_3_UP and require "resty.openssl.provider_key"
+
+local ptr_of_uint = ctypes.ptr_of_uint
+local ptr_of_size_t = ctypes.ptr_of_size_t
+local ptr_of_int = ctypes.ptr_of_int
+
+local null = ctypes.null
+local load_pem_args = { null, null, null }
+local load_der_args = { null }
+-- Library default from GM/T 0009-2012. Other implementations may use a
+-- different implicit ID, so callers should set distid for interoperability.
+local SM2_DEFAULT_DISTID = "1234567812345678"
+
+-- Traditional key types that don't use the raw public/private key API.
+local legacy_type_nids = {
+  RSA = evp_macro.EVP_PKEY_RSA,
+  ["RSA-PSS"] = C.OBJ_txt2nid("RSASSA-PSS"),
+  EC = evp_macro.EVP_PKEY_EC,
+  DH = evp_macro.EVP_PKEY_DH,
+  DHX = C.OBJ_txt2nid("dhpublicnumber"),
+  DSA = C.OBJ_txt2nid("DSA"),
+  SM2 = C.OBJ_txt2nid("SM2"),
+}
+
+local legacy_nids = {}
+for _, nid in pairs(legacy_type_nids) do
+  if nid ~= 0 then
+    legacy_nids[nid] = true
+  end
+end
+
+local get_pkey_key = {
+  [evp_macro.EVP_PKEY_RSA] = function(ctx) return C.EVP_PKEY_get0_RSA(ctx) end,
+  [evp_macro.EVP_PKEY_EC] = function(ctx) return C.EVP_PKEY_get0_EC_KEY(ctx) end,
+  [evp_macro.EVP_PKEY_DH]  = function(ctx) return C.EVP_PKEY_get0_DH(ctx) end
+}
+if legacy_type_nids.SM2 ~= 0 then
+  get_pkey_key[legacy_type_nids.SM2] = function(ctx)
+    -- 1.1.1: aliased SM2 wraps an EC_KEY. 3.x: EVP_PKEY_get0 returns NULL,
+    -- so callers use provider parameters and reject low-level mutation.
+    return ffi_cast("EC_KEY*", C.EVP_PKEY_get0(ctx))
+  end
+end
+
+-- SM2 keys only exist on the SM2 curve. A key on any other group would be a
+-- plain EC key carrying an SM2 name, so the group is checked wherever an SM2
+-- key is requested.
+local function is_sm2_curve(nid_or_name)
+  local nid = nid_or_name
+  if type(nid) == "string" then
+    nid = C.OBJ_txt2nid(nid)
+    C.ERR_clear_error()
+  end
+  return nid ~= nil and nid ~= 0 and nid == legacy_type_nids.SM2
+end
+
+local load_rsa_key_funcs
+
+if not OPENSSL_3_UP then
+  load_rsa_key_funcs= {
+    ['PEM_read_bio_RSAPrivateKey'] = true,
+    ['PEM_read_bio_RSAPublicKey'] = true,
+  } -- those functions return RSA* instead of EVP_PKEY*
+end
+
+local function load_pem_der(txt, opts, funcs)
+  local fmt = opts.format or '*'
+  if fmt ~= 'PEM' and fmt ~= 'DER' and fmt ~= "JWK" and fmt ~= '*' then
+    return nil, "expecting 'DER', 'PEM', 'JWK' or '*' as \"format\""
+  end
+
+  local typ = opts.type or '*'
+  if typ ~= 'pu' and typ ~= 'pr' and typ ~= '*' then
+    return nil, "expecting 'pr', 'pu' or '*' as \"type\""
+  end
+
+  if fmt == "JWK" and (typ == "pu" or typ == "pr") and not OPENSSL_3_UP then
+    return nil, "explicitly load private or public key from JWK format is not supported on OpenSSL 1.1.1"
+  end
+
+  log_debug("load key using fmt: ", fmt, ", type: ", typ)
+
+  local bio = C.BIO_new_mem_buf(txt, #txt)
+  if bio == nil then
+    return nil, "BIO_new_mem_buf() failed"
+  end
+  ffi_gc(bio, C.BIO_free)
+
+  local ctx
+
+  local fs = funcs[fmt][typ]
+  local passphrase_cb
+  for f, arg in pairs(fs) do
+    -- don't need BIO when loading JWK key: we parse it in Lua land
+    if f == "load_jwk" then
+      local err
+      ctx, err = jwk_lib[f](txt, typ, opts and opts.properties)
+      if ctx == nil then
+        -- if fmt is explictly set to JWK, we should return an error now
+        if fmt == "JWK" then
+          return nil, err
+        end
+        log_debug("jwk decode failed: ", err, ", continuing")
+      end
+    else
+      -- #define BIO_CTRL_RESET 1
+      local code = C.BIO_ctrl(bio, 1, 0, nil)
+      if code ~= 1 then
+        return nil, "BIO_ctrl() failed"
+      end
+
+      -- only pass in passphrase/passphrase_cb to PEM_* functions
+      if fmt == "PEM" or (fmt == "*" and arg == load_pem_args) then
+        if opts.passphrase then
+          local passphrase = opts.passphrase
+          if type(passphrase) ~= "string" then
+            -- clear errors occur when trying
+            C.ERR_clear_error()
+            return nil, "passphrase must be a string"
+          end
+          arg = { null, null, passphrase }
+        elseif opts.passphrase_cb then
+          passphrase_cb = passphrase_cb or ffi_cast("pem_password_cb", function(buf, size)
+            local p = opts.passphrase_cb()
+            local len = #p -- 1 byte for \0
+            if len > size then
+              log_warn("pkey:load_pem_der: passphrase truncated from ", len, " to ", size)
+              len = size
+            end
+            ffi_copy(buf, p, len)
+            return len
+          end)
+          arg = { null, passphrase_cb, null }
+        end
+      end
+
+      ctx = C[f](bio, unpack(arg))
+    end
+
+    if ctx ~= nil then
+      log_debug("pkey:load_pem_der: loaded pkey using function ", f)
+
+      -- pkcs1 functions create a rsa rather than evp_pkey
+      -- disable the checking in openssl 3.0 for sail safe
+      if not OPENSSL_3_UP and load_rsa_key_funcs[f] then
+        local rsa = ctx
+        ctx = C.EVP_PKEY_new()
+        if ctx == null then
+          return nil, format_error("pkey:load_pem_der: EVP_PKEY_new")
+        end
+
+        if C.EVP_PKEY_assign(ctx, evp_macro.EVP_PKEY_RSA, rsa) ~= 1 then
+          C.RSA_free(rsa)
+          C.EVP_PKEY_free(ctx)
+          return nil, "pkey:load_pem_der: EVP_PKEY_assign() failed"
+        end
+      end
+
+      break
+    end
+  end
+  if passphrase_cb ~= nil then
+    passphrase_cb:free()
+  end
+
+  if ctx == nil then
+    return nil, format_error()
+  end
+  -- clear errors occur when trying
+  C.ERR_clear_error()
+  return ctx, nil
+end
+
+local function _set_distid(pctx, id)
+  local code, err = pkey_macro.EVP_PKEY_CTX_set1_id(pctx, id)
+  if code <= 0 then
+    return nil, err or format_error("EVP_PKEY_CTX_set1_id")
+  end
+  return true
+end
+
+local function _pctx_ctrl_str(pctx, opts)
+  if not opts then
+    return true
+  end
+
+  if opts.mgf1_md and pkey_macro.EVP_PKEY_CTX_set_rsa_mgf1_md_name(pctx, opts.mgf1_md, nil) ~= 1 then
+    return nil, format_error("EVP_PKEY_CTX_set_rsa_mgf1_md_name")
+  end
+
+  if opts.oaep_md and pkey_macro.EVP_PKEY_CTX_set_rsa_oaep_md_name(pctx, opts.oaep_md, nil) ~= 1 then
+    return nil, format_error("EVP_PKEY_CTX_set_rsa_oaep_md_name")
+  end
+
+  if opts.pss_saltlen and pkey_macro.EVP_PKEY_CTX_set_rsa_pss_saltlen(pctx, opts.pss_saltlen) ~= 1 then
+    return nil, format_error("EVP_PKEY_CTX_set_rsa_pss_saltlen")
+  end
+
+  if opts.distid ~= nil then
+    local ok, err = _set_distid(pctx, opts.distid)
+    if not ok then
+      return nil, err
+    end
+  end
+
+  for _, c in ipairs(opts) do
+    if type(c) == "string" then
+      local k, v = string.match(c, "^([^:]+):(.*)$")
+      if not k or not v then
+        return nil, "unknown ctrl str: ".. c
+      end
+
+      if k == "distid" then
+        local ok, err = _set_distid(pctx, v)
+        if not ok then
+          return nil, err
+        end
+      else
+        if C.EVP_PKEY_CTX_ctrl_str(pctx, k, v) ~= 1 then
+          return nil, format_error(string.format('EVP_PKEY_CTX_ctrl_str(%s, "%s", "%s")', pctx, k, v))
+        end
+      end
+    end
+  end
+  return true
+end
+
+
+local function generate_param(key_type, config)
+  if key_type == evp_macro.EVP_PKEY_DH then
+    local dh_group = config.group
+    if dh_group then
+      local get_group_func = dh_macro.dh_groups[dh_group]
+      if not get_group_func then
+        return nil, "unknown pre-defined group " .. dh_group
+      end
+      local ctx = get_group_func()
+      if ctx == nil then
+        return nil, format_error("DH_get_x")
+      end
+      local params = C.EVP_PKEY_new()
+      if not params then
+        return nil, format_error("EVP_PKEY_new")
+      end
+      ffi_gc(params, C.EVP_PKEY_free)
+      if C.EVP_PKEY_assign(params, key_type, ctx) ~= 1 then
+        return nil, format_error("EVP_PKEY_assign")
+      end
+      return params
+    end
+  end
+
+  local pctx = C.EVP_PKEY_CTX_new_id(key_type, nil)
+  if pctx == nil then
+    return nil, format_error("EVP_PKEY_CTX_new_id")
+  end
+  ffi_gc(pctx, C.EVP_PKEY_CTX_free)
+
+  if C.EVP_PKEY_paramgen_init(pctx) ~= 1 then
+    return nil, format_error("EVP_PKEY_paramgen_init")
+  end
+
+  if key_type == evp_macro.EVP_PKEY_EC then
+    -- SM2 keys are EC keys on the SM2 group, so a type-only SM2 request takes
+    -- that group as its parameter set instead of EC's default curve.
+    local curve = config.curve or (config.type == "SM2" and "SM2") or 'prime192v1'
+    local nid = C.OBJ_txt2nid(curve)
+    C.ERR_clear_error()
+    if nid == 0 then
+      return nil, "unknown curve " .. curve
+    end
+
+    if pkey_macro.EVP_PKEY_CTX_set_ec_paramgen_curve_nid(pctx, nid) <= 0 then
+      return nil, format_error("EVP_PKEY_CTX_ctrl: EC: curve_nid")
+    end
+
+    -- use the named-curve encoding for best backward-compatibilty
+    -- and for playing well with go:crypto/x509
+    -- # define OPENSSL_EC_NAMED_CURVE  0x001
+    if pkey_macro.EVP_PKEY_CTX_set_ec_param_enc(pctx, 1) <= 0 then
+      return nil, format_error("EVP_PKEY_CTX_ctrl: EC: param_enc")
+    end
+
+  elseif key_type == evp_macro.EVP_PKEY_DH then
+    local bits = config.bits
+    if not config.param and not bits then
+      bits = 2048
+    end
+    if bits and pkey_macro.EVP_PKEY_CTX_set_dh_paramgen_prime_len(pctx, bits) <= 0 then
+      return nil, format_error("EVP_PKEY_CTX_ctrl: DH: bits")
+    end
+  end
+
+  local ok, err = _pctx_ctrl_str(pctx, config)
+  if not ok then
+    return nil, "pkey:generate_param: " .. err
+  end
+
+  local ctx_ptr = ffi_new("EVP_PKEY*[1]")
+  if C.EVP_PKEY_paramgen(pctx, ctx_ptr) ~= 1 then
+    return nil, format_error("EVP_PKEY_paramgen")
+  end
+
+  local params = ctx_ptr[0]
+  ffi_gc(params, C.EVP_PKEY_free)
+
+  return params
+end
+
+local load_param_funcs = {
+  [evp_macro.EVP_PKEY_EC] = {
+    ["*"] = {
+      ["*"] = {
+        ['PEM_read_bio_ECPKParameters'] = load_pem_args,
+        -- ['d2i_ECPKParameters_bio'] = load_der_args,
+      }
+    },
+  },
+  [evp_macro.EVP_PKEY_DH] = {
+    ["*"] = {
+      ["*"] = {
+        ['PEM_read_bio_DHparams'] = load_pem_args,
+        -- ['d2i_DHparams_bio'] = load_der_args,
+      }
+    },
+  },
+}
+
+local function generate_key(config)
+  local typ = config.type or 'RSA'
+  if typ == "EC" and is_sm2_curve(config.curve) then
+    -- Asking for the SM2 curve is asking for an SM2 key; the EC keygen
+    -- routines do not select the SM2 keymgmt on their own.
+    typ = "SM2"
+  end
+  local key_type, pctx
+
+  if typ == "RSA" then
+    key_type = evp_macro.EVP_PKEY_RSA
+  elseif typ == "EC" then
+    key_type = evp_macro.EVP_PKEY_EC
+  elseif typ == "DH" then
+    key_type = evp_macro.EVP_PKEY_DH
+  elseif typ == "SM2" then
+    if config.curve ~= nil and not is_sm2_curve(config.curve) then
+      return nil, "SM2 key type requires the SM2 curve"
+    end
+    if config.param then
+      -- SM2 has exactly one group, so parameters for another curve are
+      -- rejected rather than ignored and the key matches what was asked for.
+      local group, err = load_pem_der(config.param,
+                                      { format = config.format },
+                                      load_param_funcs[evp_macro.EVP_PKEY_EC])
+      if err then
+        return nil, "load_pem_der: " .. err
+      end
+      ffi_gc(group, C.EC_GROUP_free)
+      if not is_sm2_curve(C.EC_GROUP_get_curve_name(group)) then
+        return nil, "SM2 key type requires the SM2 curve"
+      end
+    end
+    if OPENSSL_3_UP then
+      pctx = C.EVP_PKEY_CTX_new_from_name(ctx_lib.get_libctx(), typ,
+                                          config.properties)
+      if pctx == nil then
+        return nil, format_error("EVP_PKEY_CTX_new_from_name")
+      end
+    else
+      key_type = evp_macro.EVP_PKEY_EC
+    end
+  elseif OPENSSL_3_UP then
+    pctx = C.EVP_PKEY_CTX_new_from_name(ctx_lib.get_libctx(), typ,
+                                       config.properties)
+    if pctx == nil then
+      return nil, format_error("EVP_PKEY_CTX_new_from_name")
+    end
+  elseif evp_macro.ecx_curves[typ] then
+    key_type = evp_macro.ecx_curves[typ]
+  else
+    return nil, "unsupported type " .. typ
+  end
+  if key_type == 0 then
+    return nil, "the linked OpenSSL library doesn't support " .. typ .. " key"
+  end
+
+  if pctx == nil and (key_type == evp_macro.EVP_PKEY_EC or
+                      key_type == evp_macro.EVP_PKEY_DH) then
+    local params, err
+    if config.param then
+      -- load_pem_der takes the same option shape; it must not see the key type
+      local load_opts = {}
+      for k, v in pairs(config) do
+        load_opts[k] = v
+      end
+      load_opts.type = nil
+      local ctx, err = load_pem_der(config.param, load_opts, load_param_funcs[key_type])
+      if err then
+        return nil, "load_pem_der: " .. err
+      end
+      if key_type == evp_macro.EVP_PKEY_EC then
+        local ec_group = ctx
+        ffi_gc(ec_group, C.EC_GROUP_free)
+        ctx = C.EC_KEY_new()
+        if ctx == nil then
+          return nil, "EC_KEY_new() failed"
+        end
+        if C.EC_KEY_set_group(ctx, ec_group) ~= 1 then
+          return nil, format_error("EC_KEY_set_group")
+        end
+      end
+      params = C.EVP_PKEY_new()
+      if not params then
+        return nil, format_error("EVP_PKEY_new")
+      end
+      ffi_gc(params, C.EVP_PKEY_free)
+      if C.EVP_PKEY_assign(params, key_type, ctx) ~= 1 then
+        return nil, format_error("EVP_PKEY_assign")
+      end
+    else
+      params, err = generate_param(key_type, config)
+      if err then
+        return nil, "generate_param: " .. err
+      end
+    end
+    pctx = C.EVP_PKEY_CTX_new(params, nil)
+    if pctx == nil then
+      return nil, format_error("EVP_PKEY_CTX_new")
+    end
+  elseif pctx == nil then
+    pctx = C.EVP_PKEY_CTX_new_id(key_type, nil)
+    if pctx == nil then
+      return nil, format_error("EVP_PKEY_CTX_new_id")
+    end
+  end
+
+  ffi_gc(pctx, C.EVP_PKEY_CTX_free)
+
+  if C.EVP_PKEY_keygen_init(pctx) ~= 1 then
+    return nil, format_error("EVP_PKEY_keygen_init")
+  end
+  -- RSA key parameters are set for keygen ctx not paramgen
+  if key_type == evp_macro.EVP_PKEY_RSA then
+    local bits = config.bits or 2048
+    if bits > 4294967295 then
+      return nil, "bits out of range"
+    end
+
+    if pkey_macro.EVP_PKEY_CTX_set_rsa_keygen_bits(pctx, bits) <= 0 then
+      return nil, format_error("EVP_PKEY_CTX_ctrl: RSA: bits")
+    end
+
+    if config.exp then
+      -- don't free exp as it's used internally in key
+      local exp = C.BN_new()
+      if exp == nil then
+        return nil, "BN_new() failed"
+      end
+      C.BN_set_word(exp, config.exp)
+
+      if pkey_macro.EVP_PKEY_CTX_set_rsa_keygen_pubexp(pctx, exp) <= 0 then
+        return nil, format_error("EVP_PKEY_CTX_ctrl: RSA: exp")
+      end
+    end
+  end
+
+  local ok, err = _pctx_ctrl_str(pctx, config)
+  if not ok then
+    return nil, "pkey:generate_key: " .. err
+  end
+
+  local ctx_ptr = ffi_new("EVP_PKEY*[1]")
+  -- TODO: move to use EVP_PKEY_gen after drop support for <1.1.1
+  if C.EVP_PKEY_keygen(pctx, ctx_ptr) ~= 1 then
+    return nil, format_error("EVP_PKEY_gen")
+  end
+  return ctx_ptr[0]
+end
+
+local function compose_key(config)
+  local typ = config.type or 'RSA'
+  local key_type
+
+  if typ == "RSA" then
+    key_type = evp_macro.EVP_PKEY_RSA
+  elseif typ == "EC" or typ == "SM2" then
+    key_type = evp_macro.EVP_PKEY_EC
+  elseif OPENSSL_3_UP then
+    return provider_key_lib.set_parameters(nil, nil, config.params, typ,
+                                           config.properties)
+  elseif evp_macro.ecx_curves[typ] then
+    key_type = evp_macro.ecx_curves[typ]
+  else
+    return nil, "unsupported type " .. typ
+  end
+  if key_type == 0 then
+    return nil, "the linked OpenSSL library doesn't support " .. typ .. " key"
+  end
+
+  if typ == "SM2" then
+    local params = config.params
+    if params.group ~= nil and not is_sm2_curve(params.group) then
+      return nil, "SM2 key type requires the SM2 curve"
+    end
+    if params.public == nil and (params.x == nil or params.y == nil) then
+      -- An SM2 signature covers the public key as well. OpenSSL 3 dereferences
+      -- the missing public point of a composed EC key instead of failing.
+      return nil, "SM2 key type requires the public key"
+    end
+  end
+
+  local key, err, key_free, _
+
+  if key_type == evp_macro.EVP_PKEY_EC then
+    key = C.EC_KEY_new()
+    if key == nil then
+      return nil, "EC_KEY_new failed"
+    end
+    key_free = C.EC_KEY_free
+    _, err = ec_lib.set_parameters(key, config.params)
+  elseif key_type == evp_macro.EVP_PKEY_RSA then
+    key = C.RSA_new()
+    if key == nil then
+      return nil, "RSA_new failed"
+    end
+    key_free = C.RSA_free
+    _, err = rsa_lib.set_parameters(key, config.params)
+  elseif key_type == evp_macro.EVP_PKEY_ED25519 or
+         key_type == evp_macro.EVP_PKEY_X25519 or
+         key_type == evp_macro.EVP_PKEY_ED448 or
+         key_type == evp_macro.EVP_PKEY_X448 then
+    return ecx_lib.set_parameters(key_type, nil, config.params)
+  end
+
+  if err then
+    key_free(key)
+    return nil, "failed to construct " .. typ.. " key from parameters: " .. err
+  end
+
+  local ctx = C.EVP_PKEY_new()
+  if ctx == nil then
+    key_free(key)
+    return nil, "EVP_PKEY_new() failed"
+  end
+
+  local code = C.EVP_PKEY_assign(ctx, key_type, key)
+  if code ~= 1 then
+    key_free(key)
+    C.EVP_PKEY_free(ctx)
+    return nil, "EVP_PKEY_assign() failed"
+  end
+
+  return ctx
+end
+
+local load_key_try_funcs = {} do
+  -- TODO: pkcs1 load functions are not required in openssl 3.0
+  local _load_key_try_funcs = {
+    PEM = {
+      -- Note: make sure we always try load priv key first
+      pr = {
+        ['PEM_read_bio_PrivateKey'] = load_pem_args,
+        -- disable in openssl3.0, PEM_read_bio_PrivateKey can read pkcs1 in 3.0
+        ['PEM_read_bio_RSAPrivateKey'] = not OPENSSL_3_UP and load_pem_args or nil,
+      },
+      pu = {
+        ['PEM_read_bio_PUBKEY'] = load_pem_args,
+        -- disable in openssl3.0, PEM_read_bio_PrivateKey can read pkcs1 in 3.0
+        ['PEM_read_bio_RSAPublicKey'] = not OPENSSL_3_UP and load_pem_args or nil,
+      },
+    },
+    DER = {
+      pr = { ['d2i_PrivateKey_bio'] = load_der_args, },
+      pu = { ['d2i_PUBKEY_bio'] = load_der_args, },
+    },
+    JWK = {
+      pr = { ['load_jwk'] = {}, },
+      pu = { ['load_jwk'] = {}, },
+    }
+  }
+  -- populate * funcs
+  local all_funcs = {}
+  local typ_funcs = {}
+  for fmt, ffs in pairs(_load_key_try_funcs) do
+    load_key_try_funcs[fmt] = ffs
+
+    local funcs = {}
+    for typ, fs in pairs(ffs) do
+      for f, arg in pairs(fs) do
+        funcs[f] = arg
+        all_funcs[f] = arg
+        if not typ_funcs[typ] then
+          typ_funcs[typ] = {}
+        end
+        typ_funcs[typ] = arg
+      end
+    end
+    load_key_try_funcs[fmt]["*"] = funcs
+  end
+  load_key_try_funcs["*"] = {}
+  load_key_try_funcs["*"]["*"] = all_funcs
+  for typ, fs in pairs(typ_funcs) do
+    load_key_try_funcs[typ] = fs
+  end
+end
+
+local function __tostring(self, is_priv, fmt, is_pkcs1)
+  if fmt == "JWK" then
+    return jwk_lib.dump_jwk(self, is_priv)
+  elseif is_pkcs1 then
+    if fmt ~= "PEM" or self.key_type ~= evp_macro.EVP_PKEY_RSA then
+      return nil, "PKCS#1 format is only supported to encode RSA key in \"PEM\" format"
+    elseif OPENSSL_3_UP then -- maybe possible with OSSL_ENCODER_CTX_new_for_pkey though
+      return nil, "writing out RSA key in PKCS#1 format is not supported in OpenSSL 3.0"
+    end
+  end
+  if is_priv then
+    if fmt == "DER" then
+      return bio_util.read_wrap(C.i2d_PrivateKey_bio, self.ctx)
+    end
+    -- PEM
+    if is_pkcs1 then
+      local rsa = get_pkey_key[evp_macro.EVP_PKEY_RSA](self.ctx)
+      if rsa == nil then
+        return nil, "unable to read RSA key for writing"
+      end
+      return bio_util.read_wrap(C.PEM_write_bio_RSAPrivateKey,
+        rsa,
+        nil, nil, 0, nil, nil)
+    end
+    return bio_util.read_wrap(C.PEM_write_bio_PrivateKey,
+      self.ctx,
+      nil, nil, 0, nil, nil)
+  else
+    if fmt == "DER" then
+      return bio_util.read_wrap(C.i2d_PUBKEY_bio, self.ctx)
+    end
+    -- PEM
+    if is_pkcs1 then
+      local rsa = get_pkey_key[evp_macro.EVP_PKEY_RSA](self.ctx)
+      if rsa == nil then
+        return nil, "unable to read RSA key for writing"
+      end
+      return bio_util.read_wrap(C.PEM_write_bio_RSAPublicKey, rsa)
+    end
+    return bio_util.read_wrap(C.PEM_write_bio_PUBKEY, self.ctx)
+  end
+
+end
+
+local _M = {}
+local mt = { __index = _M, __tostring = __tostring }
+
+local empty_table = {}
+local evp_pkey_ptr_ct = ffi.typeof('EVP_PKEY*')
+
+function _M.new(s, opts)
+  local ctx, err
+  s = s or {}
+  if type(s) == 'table' then
+    if s.params then
+      ctx, err = compose_key(s)
+    else
+      ctx, err = generate_key(s)
+    end
+    if err then
+      err = "pkey.new:new_key: " .. err
+    end
+  elseif type(s) == 'string' then
+    ctx, err = load_pem_der(s, opts or empty_table, load_key_try_funcs)
+    if err then
+      err = "pkey.new:load_key: " .. err
+    end
+  elseif type(s) == 'cdata' then
+    if ffi.istype(evp_pkey_ptr_ct, s) then
+      ctx = s
+    else
+      return nil, "pkey.new: expect a EVP_PKEY* cdata at #1"
+    end
+  else
+    return nil, "pkey.new: unexpected type " .. type(s) .. " at #1"
+  end
+
+  if err then
+    return nil, err
+  end
+
+  ffi_gc(ctx, C.EVP_PKEY_free)
+
+  local key_type
+  if OPENSSL_3_UP then
+    -- The type name is the name of the keymgmt, which can be more generic than
+    -- the key itself: a decoded key on the SM2 curve uses the EC keymgmt while
+    -- EVP_PKEY_get_id() reports NID_sm2. Prefer the id when it names a key type
+    -- this module knows, and fall back to the type name otherwise.
+    local id = C.EVP_PKEY_get_id(ctx)
+    if legacy_nids[id] then
+      key_type = id
+    else
+      local p = C.EVP_PKEY_get0_type_name(ctx)
+      if p == nil then
+        return nil, "pkey.new: cannot get key type name"
+      end
+      local type_name = ffi_str(p)
+      key_type = legacy_type_nids[type_name] or C.OBJ_txt2nid(type_name)
+      if key_type == 0 then
+        C.ERR_clear_error()
+      end
+    end
+  else
+    key_type = C.EVP_PKEY_base_id(ctx)
+    if key_type == 0 then
+      return nil, "pkey.new: cannot get key_type"
+    end
+    if key_type == evp_macro.EVP_PKEY_EC and legacy_type_nids.SM2 ~= 0 then
+      -- OpenSSL 1.1.1 keeps an SM2 key in an EC_KEY and needs the alias type to
+      -- run SM2 operations on it.
+      local grp = C.EC_KEY_get0_group(get_pkey_key[evp_macro.EVP_PKEY_EC](ctx))
+      if grp ~= nil and C.EC_GROUP_get_curve_name(grp) == legacy_type_nids.SM2 then
+        if C.EVP_PKEY_set_alias_type(ctx, legacy_type_nids.SM2) ~= 1 then
+          return nil, "pkey.new: failed to set SM2 alias type"
+        end
+        key_type = legacy_type_nids.SM2
+      end
+    end
+  end
+  local raw_key_lib
+  if not legacy_nids[key_type] then
+    raw_key_lib = OPENSSL_3_UP and provider_key_lib or ecx_lib
+  end
+
+  -- although OpenSSL discourages to use this size for digest/verify
+  -- but this is good enough for now
+  local buf_size = OPENSSL_3_UP and C.EVP_PKEY_get_size(ctx) or C.EVP_PKEY_size(ctx)
+
+  local self = setmetatable({
+    ctx = ctx,
+    pkey_ctx = nil,
+    key_type = key_type,
+    raw_key_lib = raw_key_lib,
+    buf = ctypes.uchar_array(buf_size),
+    buf_size = buf_size,
+  }, mt)
+
+  return self, nil
+end
+
+function _M.istype(l)
+  return l and l.ctx and ffi.istype(evp_pkey_ptr_ct, l.ctx)
+end
+
+function _M:get_key_type(nid_only)
+  if self.key_type == 0 then
+    return nil, "pkey:get_key_type: key type has no ASN.1 NID"
+  end
+  return nid_only and self.key_type or objects_lib.nid2table(self.key_type)
+end
+
+function _M:get_size()
+  return OPENSSL_3_UP and C.EVP_PKEY_get_size(self.ctx) or C.EVP_PKEY_size(self.ctx)
+end
+
+function _M:get_default_digest_type()
+  local nid = ptr_of_int()
+  local code = C.EVP_PKEY_get_default_digest_nid(self.ctx, nid)
+  if code == -2 then
+    return nil, "operation is not supported by the public key algorithm"
+  elseif code <= 0 then
+    return nil, format_error("get_default_digest", code)
+  end
+
+  local ret = objects_lib.nid2table(nid[0])
+  ret.mandatory = code == 2
+  return ret
+end
+
+function _M:get_provider_name()
+  if not OPENSSL_3_UP then
+    return false, "pkey:get_provider_name is not supported"
+  end
+  local p = C.EVP_PKEY_get0_provider(self.ctx)
+  if p == nil then
+    return nil
+  end
+  return ffi_str(C.OSSL_PROVIDER_get0_name(p))
+end
+
+if OPENSSL_3_UP then
+  local param_lib = require "resty.openssl.param"
+  _M.settable_params, _M.set_params, _M.gettable_params, _M.get_param = param_lib.get_params_func("EVP_PKEY", "key_type")
+end
+
+function _M:get_parameters()
+  if not self.raw_key_lib then
+    local getter = get_pkey_key[self.key_type]
+    if not getter then
+      return nil, "key getter not defined"
+    end
+    local key = getter(self.ctx)
+    if key == nil then
+      if OPENSSL_3_UP and self.key_type == legacy_type_nids.SM2 then
+        return ec_lib.get_provider_parameters(self.ctx)
+      end
+      return nil, format_error("EVP_PKEY_get0_{key}")
+    end
+
+    if self.key_type == evp_macro.EVP_PKEY_RSA then
+      return rsa_lib.get_parameters(key)
+    elseif self.key_type == evp_macro.EVP_PKEY_EC or self.key_type == legacy_type_nids.SM2 then
+      return ec_lib.get_parameters(key)
+    elseif self.key_type == evp_macro.EVP_PKEY_DH then
+      return dh_lib.get_parameters(key)
+    end
+  else
+    return self.raw_key_lib.get_parameters(self.ctx)
+  end
+end
+
+function _M:set_parameters(opts)
+  if not self.raw_key_lib then
+    local getter = get_pkey_key[self.key_type]
+    if not getter then
+      return nil, "key getter not defined"
+    end
+    local key = getter(self.ctx)
+    if key == nil then
+      return nil, format_error("EVP_PKEY_get0_{key}")
+    end
+
+    if self.key_type == evp_macro.EVP_PKEY_RSA then
+      return rsa_lib.set_parameters(key, opts)
+    elseif self.key_type == legacy_type_nids.SM2 then
+      -- An SM2 key has exactly one group; a different one would turn it into a
+      -- plain EC key that no longer matches how it was classified.
+      if opts.group ~= nil and
+          objects_lib.txtnid2nid(opts.group) ~= legacy_type_nids.SM2 then
+        return nil, "pkey:set_parameters: SM2 key requires the SM2 group"
+      end
+      return ec_lib.set_parameters(key, opts)
+    elseif self.key_type == evp_macro.EVP_PKEY_EC then
+      return ec_lib.set_parameters(key, opts)
+    elseif self.key_type == evp_macro.EVP_PKEY_DH then
+      return dh_lib.set_parameters(key, opts)
+    end
+  else
+    local ctx, err = self.raw_key_lib.set_parameters(self.key_type,
+                                                     self.ctx, opts)
+    if err then
+      return false, err
+    end
+
+    if self.pkey_ctx ~= nil then
+      ffi_gc(self.pkey_ctx, nil)
+      C.EVP_PKEY_CTX_free(self.pkey_ctx)
+      self.pkey_ctx = nil
+    end
+    ffi_gc(self.ctx, nil)
+    C.EVP_PKEY_free(self.ctx)
+    self.ctx = ffi_gc(ctx, C.EVP_PKEY_free)
+
+    self.buf_size = OPENSSL_3_UP and C.EVP_PKEY_get_size(self.ctx) or
+                                     C.EVP_PKEY_size(self.ctx)
+    self.buf = ctypes.uchar_array(self.buf_size)
+    return true
+  end
+end
+
+function _M:is_private()
+  if self.raw_key_lib then
+    return self.raw_key_lib.is_private(self.ctx)
+  end
+
+  local params, err = self:get_parameters()
+  if params == nil then
+    return nil, err
+  end
+  if self.key_type == evp_macro.EVP_PKEY_RSA then
+    return params.d ~= nil
+  else
+    return params.private ~= nil
+  end
+end
+
+local ASYMMETRIC_OP_ENCRYPT = 0x1
+local ASYMMETRIC_OP_DECRYPT = 0x2
+local ASYMMETRIC_OP_SIGN_RAW = 0x3
+local ASYMMETRIC_OP_VERIFY_RAW = 0x4
+local ASYMMETRIC_OP_VERIFY_RECOVER = 0x5
+
+local function asymmetric_routine(self, s, op, padding, opts)
+  if type(s) ~= "string" then
+    return nil, "pkey:asymmetric_routine: expect a string at #1"
+  end
+
+  local pkey_ctx
+
+  if self.key_type == evp_macro.EVP_PKEY_RSA then
+    if padding then
+      local p = tonumber(padding)
+      if not p then
+        return nil, "invalid padding: " .. tostring(padding)
+      end
+      padding = p
+    else
+      padding = rsa_macro.paddings.RSA_PKCS1_PADDING
+    end
+  end
+
+  if self.pkey_ctx ~= nil and self.key_type ~= evp_macro.EVP_PKEY_RSA then
+    pkey_ctx = self.pkey_ctx
+  else
+    pkey_ctx = C.EVP_PKEY_CTX_new(self.ctx, nil)
+    if pkey_ctx == nil then
+      return nil, format_error("pkey:asymmetric_routine EVP_PKEY_CTX_new()")
+    end
+    ffi_gc(pkey_ctx, C.EVP_PKEY_CTX_free)
+    self.pkey_ctx = pkey_ctx
+  end
+
+  local f, fint, op_name
+  if op == ASYMMETRIC_OP_ENCRYPT then
+    fint = C.EVP_PKEY_encrypt_init
+    f = C.EVP_PKEY_encrypt
+    op_name = "encrypt"
+  elseif op == ASYMMETRIC_OP_DECRYPT then
+    fint = C.EVP_PKEY_decrypt_init
+    f = C.EVP_PKEY_decrypt
+    op_name = "decrypt"
+  elseif op == ASYMMETRIC_OP_SIGN_RAW then
+    fint = C.EVP_PKEY_sign_init
+    f = C.EVP_PKEY_sign
+    op_name = "sign"
+  elseif op == ASYMMETRIC_OP_VERIFY_RAW then
+    fint = C.EVP_PKEY_verify_init
+    f = C.EVP_PKEY_verify
+    op_name = "verify"
+  elseif op == ASYMMETRIC_OP_VERIFY_RECOVER then
+    fint = C.EVP_PKEY_verify_recover_init
+    f = C.EVP_PKEY_verify_recover
+    op_name = "verify_recover"
+  else
+    error("bad \"op\", got " .. op, 2)
+  end
+
+  local code = fint(pkey_ctx)
+  if code < 1 then
+    return nil, format_error("pkey:asymmetric_routine EVP_PKEY_" .. op_name .. "_init", code)
+  end
+
+  -- EVP_PKEY_CTX_ctrl must be called after *_init
+  if self.key_type == evp_macro.EVP_PKEY_RSA and padding and
+      pkey_macro.EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, padding) ~= 1 then
+    return nil, format_error("pkey:asymmetric_routine EVP_PKEY_CTX_set_rsa_padding")
+  end
+
+  local ok, err = _pctx_ctrl_str(pkey_ctx, opts)
+  if not ok then
+    return nil, "pkey:asymmetric_routine: " .. err
+  end
+
+  local buf, buf_len
+  if opts and opts.buf_in then
+    buf = opts.buf_in
+    buf_len = #buf
+  else
+    buf = self.buf
+    -- EVP_PKEY_size() is the size of the key, which is not always the size of
+    -- the ciphertext: ask the operation how much room its output needs and
+    -- fall back to the cached buffer when that is unknown or small enough.
+    -- The cached buffer is never resized, so it stays usable by the next call.
+    local op_buf, op_len
+    if op == ASYMMETRIC_OP_ENCRYPT or op == ASYMMETRIC_OP_DECRYPT then
+      local need = ptr_of_size_t()
+      if f(pkey_ctx, nil, need, s, #s) > 0 then
+        local size = tonumber(need[0])
+        if op == ASYMMETRIC_OP_DECRYPT and not OPENSSL_3_UP and size < #s then
+          -- CVE-2021-3711: OpenSSL 1.1.1k and earlier may underestimate the
+          -- buffer needed to decrypt a ciphertext.
+          size = #s
+        end
+        if size > self.buf_size then
+          op_buf = ctypes.uchar_array(size)
+          op_len = ptr_of_size_t(size)
+        end
+      else
+        C.ERR_clear_error()
+      end
+    end
+
+    if op_buf then
+      buf = op_buf
+      buf_len = op_len
+    else
+      buf_len = ptr_of_size_t(self.buf_size)
+    end
+  end
+
+  code = f(pkey_ctx, buf, buf_len, s, #s)
+  if code <= 0 then
+    return nil, format_error("pkey:asymmetric_routine EVP_PKEY_" .. op_name, code)
+  end
+
+  if not opts or not opts.buf_in then
+    return ffi_str(buf, buf_len[0]), nil
+  end
+
+  return true
+end
+
+_M.PADDINGS = rsa_macro.paddings
+
+function _M:encrypt(s, padding, opts)
+  return asymmetric_routine(self, s, ASYMMETRIC_OP_ENCRYPT, padding, opts)
+end
+
+function _M:decrypt(s, padding, opts)
+  return asymmetric_routine(self, s, ASYMMETRIC_OP_DECRYPT, padding, opts)
+end
+
+function _M:sign_raw(s, padding, opts)
+  -- TODO: temporary hack before OpenSSL has proper check for existence of private key
+  if self.raw_key_lib and not self:is_private() then
+    return nil, "pkey:sign_raw: missing private key"
+  end
+
+  return asymmetric_routine(self, s, ASYMMETRIC_OP_SIGN_RAW, padding, opts)
+end
+
+function _M:verify_raw(signature, hashed_message, md_alg, padding, opts)
+  opts = opts or {}
+  opts.buf_in = signature
+  if md_alg then
+    table.insert(opts, "digest:" .. md_alg)
+  end
+
+  return asymmetric_routine(self, hashed_message, ASYMMETRIC_OP_VERIFY_RAW, padding, opts)
+end
+
+function _M:verify_recover(s, padding, opts)
+  return asymmetric_routine(self, s, ASYMMETRIC_OP_VERIFY_RECOVER, padding, opts)
+end
+
+local evp_pkey_ctx_ptr_ptr_ct = ffi.typeof('EVP_PKEY_CTX*[1]')
+
+local function sign_verify_prepare(self, fint, md_alg, padding, opts)
+  local md_ctx = C.EVP_MD_CTX_new()
+  if md_ctx == nil then
+    return nil, "pkey:sign_verify_prepare: EVP_MD_CTX_new() failed"
+  end
+  ffi_gc(md_ctx, C.EVP_MD_CTX_free)
+
+  local algo
+  if md_alg then
+    if OPENSSL_3_UP then
+      algo = C.EVP_MD_fetch(ctx_lib.get_libctx(), md_alg, nil)
+    else
+      algo = C.EVP_get_digestbyname(md_alg)
+    end
+    if algo == nil then
+      return nil, string.format("pkey:sign_verify_prepare: invalid digest type \"%s\"", md_alg)
+    end
+  end
+
+  local ppkey_ctx = evp_pkey_ctx_ptr_ptr_ct()
+  local pre_pctx
+  if self.key_type == legacy_type_nids.SM2 then
+    pre_pctx = C.EVP_PKEY_CTX_new(self.ctx, nil)
+    if pre_pctx == nil then
+      return nil, format_error("pkey:sign_verify_prepare: EVP_PKEY_CTX_new failed")
+    end
+    ffi_gc(pre_pctx, C.EVP_PKEY_CTX_free)
+
+    if pkey_macro.EVP_PKEY_CTX_set1_id(pre_pctx, SM2_DEFAULT_DISTID) <= 0 then
+      return nil, format_error("pkey:sign_verify_prepare: EVP_PKEY_CTX_set1_id")
+    end
+
+    local ok, err = _pctx_ctrl_str(pre_pctx, opts)
+    if not ok then
+      return nil, "pkey:sign_verify_prepare: " .. err
+    end
+
+    C.EVP_MD_CTX_set_pkey_ctx(md_ctx, pre_pctx)
+  end
+
+  if fint(md_ctx, ppkey_ctx, algo, nil, self.ctx) ~= 1 then
+    return nil, format_error("pkey:sign_verify_prepare: Init failed")
+  end
+
+  if not pre_pctx then
+    -- EVP_PKEY_CTX_ctrl must be called after *_init
+    if self.key_type == evp_macro.EVP_PKEY_RSA and padding and
+        pkey_macro.EVP_PKEY_CTX_set_rsa_padding(ppkey_ctx[0], padding) ~= 1 then
+      return nil, format_error("pkey:sign_verify_prepare EVP_PKEY_CTX_set_rsa_padding")
+    end
+
+    local ok, err = _pctx_ctrl_str(ppkey_ctx[0], opts)
+    if not ok then
+      return nil, "pkey:sign_verify_prepare: " .. err
+    end
+  end
+
+  return md_ctx, nil, pre_pctx
+end
+
+function _M:sign(digest, md_alg, padding, opts)
+  -- TODO: temporary hack before OpenSSL has proper check for existence of private key
+  if self.raw_key_lib and not self:is_private() then
+    return nil, "pkey:sign: missing private key"
+  end
+
+  local ret, err
+
+  if digest_lib.istype(digest) then
+    if self.key_type == legacy_type_nids.SM2 then
+      return nil, "pkey:sign: digest instances are not supported for SM2; pass the message as a string"
+    end
+    local length = ptr_of_uint()
+    if C.EVP_SignFinal(digest.ctx, self.buf, length, self.ctx) ~= 1 then
+      return nil, format_error("pkey:sign: EVP_SignFinal")
+    end
+    ret = ffi_str(self.buf, length[0])
+  elseif type(digest) == "string" then
+    local md_ctx, err, pre_pctx = sign_verify_prepare(self, C.EVP_DigestSignInit, md_alg, padding, opts)
+    if err then
+      return nil, err
+    end
+
+    local length = ptr_of_size_t(self.buf_size)
+    local code = C.EVP_DigestSign(md_ctx, self.buf, length, digest, #digest)
+    if pre_pctx ~= nil then
+      -- md_ctx borrows pre_pctx, so keep it alive through the final C call.
+      ffi_gc(pre_pctx, C.EVP_PKEY_CTX_free)
+    end
+    if code ~= 1 then
+      return nil, format_error("pkey:sign: EVP_DigestSign")
+    end
+    ret = ffi_str(self.buf, length[0])
+  else
+    return nil, "pkey:sign: expect a digest instance or a string at #1"
+  end
+
+  if (self.key_type == evp_macro.EVP_PKEY_EC or self.key_type == legacy_type_nids.SM2) and opts and opts.ecdsa_use_raw then
+    local bits = OPENSSL_3_UP and C.EVP_PKEY_get_bits(self.ctx) or C.EVP_PKEY_bits(self.ctx)
+    ret, err = ecdsa_util.sig_der2raw(ret, bits)
+    if err then
+      return nil, "pkey:sign: ecdsa.sig_der2raw: " .. err
+    end
+  end
+
+  return ret
+end
+
+function _M:verify(signature, digest, md_alg, padding, opts)
+  if type(signature) ~= "string" then
+    return nil, "pkey:verify: expect a string at #1"
+  end
+  local err
+
+  if (self.key_type == evp_macro.EVP_PKEY_EC or self.key_type == legacy_type_nids.SM2) and opts and opts.ecdsa_use_raw then
+    local bits = OPENSSL_3_UP and C.EVP_PKEY_get_bits(self.ctx) or C.EVP_PKEY_bits(self.ctx)
+    signature, err = ecdsa_util.sig_raw2der(signature, bits)
+    if err then
+      return nil, "pkey:verify: ecdsa.sig_raw2der: " .. err
+    end
+  end
+
+  local code
+  if digest_lib.istype(digest) then
+    if self.key_type == legacy_type_nids.SM2 then
+      return nil, "pkey:verify: digest instances are not supported for SM2; pass the message as a string"
+    end
+    code = C.EVP_VerifyFinal(digest.ctx, signature, #signature, self.ctx)
+  elseif type(digest) == "string" then
+    local md_ctx, err, pre_pctx = sign_verify_prepare(self, C.EVP_DigestVerifyInit, md_alg, padding, opts)
+    if err then
+      return nil, err
+    end
+
+    code = C.EVP_DigestVerify(md_ctx, signature, #signature, digest, #digest)
+    if pre_pctx ~= nil then
+      -- md_ctx borrows pre_pctx, so keep it alive through the final C call.
+      ffi_gc(pre_pctx, C.EVP_PKEY_CTX_free)
+    end
+  else
+    return nil, "pkey:verify: expect a digest instance or a string at #2"
+  end
+
+  if code == 0 then
+    return false, format_error("pkey:verify")
+  elseif code == 1 then
+    return true, nil
+  end
+  return false, format_error("pkey:verify")
+end
+
+function _M:derive(peerkey)
+  if not self.istype(peerkey) then
+    return nil, "pkey:derive: expect a pkey instance at #1"
+  end
+  local pctx = C.EVP_PKEY_CTX_new(self.ctx, nil)
+  if pctx == nil then
+    return nil, "pkey:derive: EVP_PKEY_CTX_new() failed"
+  end
+  ffi_gc(pctx, C.EVP_PKEY_CTX_free)
+  local code = C.EVP_PKEY_derive_init(pctx)
+  if code <= 0 then
+    return nil, format_error("pkey:derive: EVP_PKEY_derive_init", code)
+  end
+
+  code = C.EVP_PKEY_derive_set_peer(pctx, peerkey.ctx)
+  if code <= 0 then
+    return nil, format_error("pkey:derive: EVP_PKEY_derive_set_peer", code)
+  end
+
+  local buflen = ptr_of_size_t()
+  code = C.EVP_PKEY_derive(pctx, nil, buflen)
+  if code <= 0 then
+    return nil, format_error("pkey:derive: EVP_PKEY_derive check buffer size", code)
+  end
+
+  local buf = ctypes.uchar_array(buflen[0])
+  code = C.EVP_PKEY_derive(pctx, buf, buflen)
+  if code <= 0 then
+    return nil, format_error("pkey:derive: EVP_PKEY_derive", code)
+  end
+
+  return ffi_str(buf, buflen[0])
+end
+
+if OPENSSL_3_UP then
+  local function new_kem_ctx(self, properties)
+    local pctx = C.EVP_PKEY_CTX_new_from_pkey(ctx_lib.get_libctx(), self.ctx,
+                                              properties)
+    if pctx == nil then
+      return nil, format_error("pkey: KEM EVP_PKEY_CTX_new_from_pkey")
+    end
+    return ffi_gc(pctx, C.EVP_PKEY_CTX_free)
+  end
+
+  function _M:encapsulate(properties)
+    local pctx, err = new_kem_ctx(self, properties)
+    if pctx == nil then
+      return nil, err
+    end
+    local code = C.EVP_PKEY_encapsulate_init(pctx, nil)
+    if code <= 0 then
+      return nil, format_error("pkey:encapsulate: EVP_PKEY_encapsulate_init", code)
+    end
+
+    local wrapped_len = ptr_of_size_t()
+    local secret_len = ptr_of_size_t()
+    code = C.EVP_PKEY_encapsulate(pctx, nil, wrapped_len, nil, secret_len)
+    if code <= 0 then
+      return nil, format_error("pkey:encapsulate: EVP_PKEY_encapsulate size", code)
+    end
+
+    local wrapped = ctypes.uchar_array(wrapped_len[0])
+    local secret = ctypes.uchar_array(secret_len[0])
+    code = C.EVP_PKEY_encapsulate(pctx, wrapped, wrapped_len,
+                                  secret, secret_len)
+    if code <= 0 then
+      return nil, format_error("pkey:encapsulate: EVP_PKEY_encapsulate", code)
+    end
+    return ffi_str(wrapped, wrapped_len[0]), ffi_str(secret, secret_len[0])
+  end
+
+  function _M:decapsulate(wrapped, properties)
+    if type(wrapped) ~= "string" then
+      return nil, "pkey:decapsulate: expect a string at #1"
+    end
+    local pctx, err = new_kem_ctx(self, properties)
+    if pctx == nil then
+      return nil, err
+    end
+    local code = C.EVP_PKEY_decapsulate_init(pctx, nil)
+    if code <= 0 then
+      return nil, format_error("pkey:decapsulate: EVP_PKEY_decapsulate_init", code)
+    end
+
+    local secret_len = ptr_of_size_t()
+    code = C.EVP_PKEY_decapsulate(pctx, nil, secret_len, wrapped, #wrapped)
+    if code <= 0 then
+      return nil, format_error("pkey:decapsulate: EVP_PKEY_decapsulate size", code)
+    end
+
+    local secret = ctypes.uchar_array(secret_len[0])
+    code = C.EVP_PKEY_decapsulate(pctx, secret, secret_len,
+                                  wrapped, #wrapped)
+    if code <= 0 then
+      return nil, format_error("pkey:decapsulate: EVP_PKEY_decapsulate", code)
+    end
+    return ffi_str(secret, secret_len[0])
+  end
+end
+
+local function pub_or_priv_is_pri(pub_or_priv)
+  if pub_or_priv == 'private' or pub_or_priv == 'PrivateKey' then
+    return true
+  elseif not pub_or_priv or pub_or_priv == 'public' or pub_or_priv == 'PublicKey' then
+    return false
+  else
+    return nil, string.format("can only export private or public key, not %s", pub_or_priv)
+  end
+end
+
+function _M:tostring(pub_or_priv, fmt, pkcs1)
+  local is_priv, err = pub_or_priv_is_pri(pub_or_priv)
+  if err then
+    return nil, "pkey:tostring: " .. err
+  end
+  return __tostring(self, is_priv, fmt, pkcs1)
+end
+
+function _M:to_PEM(pub_or_priv, pkcs1)
+  return self:tostring(pub_or_priv, "PEM", pkcs1)
+end
+
+function _M.paramgen(config)
+  local typ = config.type
+  local key_type, write_func, get_ctx_func
+  if typ == "EC" then
+    key_type = evp_macro.EVP_PKEY_EC
+    if key_type == 0 then
+      return nil, "pkey.paramgen: the linked OpenSSL library doesn't support EC key"
+    end
+    write_func = C.PEM_write_bio_ECPKParameters
+    get_ctx_func = function(ctx)
+      local ctx = get_pkey_key[key_type](ctx)
+      if ctx == nil then
+        error(format_error("pkey.paramgen: EVP_PKEY_get0_{key}"))
+      end
+      return C.EC_KEY_get0_group(ctx)
+    end
+  elseif typ == "DH" then
+    key_type = evp_macro.EVP_PKEY_DH
+    if key_type == 0 then
+      return nil, "pkey.paramgen: the linked OpenSSL library doesn't support DH key"
+    end
+    write_func = C.PEM_write_bio_DHparams
+    get_ctx_func = get_pkey_key[key_type]
+  else
+    return nil, "pkey.paramgen: unsupported type " .. type
+  end
+
+  local params, err = generate_param(key_type, config)
+  if err then
+    return nil, "pkey.paramgen: generate_param: " .. err
+  end
+
+  local ctx = get_ctx_func(params)
+  if ctx == nil then
+    return nil, format_error("pkey.paramgen: EVP_PKEY_get0_{key}")
+  end
+
+  -- since ctx is always a internal pointer inside of params (a EVP_PKEY*), thus avoid use tail call
+  -- here to avoid using `ctx` after `params` is GC collected.
+  local res, err = bio_util.read_wrap(write_func, ctx)
+  return res, err
+end
+
+return _M

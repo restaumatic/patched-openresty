@@ -1,0 +1,369 @@
+=encoding utf-8
+
+
+=head1 Name
+
+
+freebsd_tuning - Tuning FreeBSD for the highload
+
+
+=head1 Listen queues
+
+
+
+After the connection has been established it is placed in the listen queue
+of the listen socket.
+To see the current listen queues state, you may run the command
+“C<netstat -Lan>”:
+
+
+    
+    Current listen queue sizes (qlen/incqlen/maxqlen)
+    Proto Listen         Local Address
+    tcp4  <b>10</b>/0/128       *.80
+    tcp4  0/0/128        *.22
+
+
+
+This is a normal case: the listen queue of the port *:80 contains
+just 10 unaccepted connections.
+If the web server is not able to handle the load, you may see
+something like this:
+
+
+    
+    Current listen queue sizes (qlen/incqlen/maxqlen)
+    Proto Listen         Local Address
+    tcp4  <b>192/</b>0/<b>128</b>      *.80
+    tcp4  0/0/128        *.22
+
+
+
+Here are 192 unaccepted connections and most likely new coming connections
+are discarding. Although the limit is 128 connections, FreeBSD allows
+receiving 1.5 times connections than the limit before it starts to discard
+the new connections. You may increase the limit using
+
+
+    
+    sysctl kern.ipc.soacceptqueue=4096
+
+
+
+However, note that the queue is only a damper to quench bursts.
+If it is always overflowed, this means that you need to improve the web server,
+but not to continue to increase the limit.
+You may also change the listen queue maximum size in nginx configuration:
+
+
+    
+    listen  80  backlog=1024;
+
+
+
+However, you may not set it more than the current
+F<kern.ipc.soacceptqueue> value.
+By default nginx uses the maximum value of FreeBSD kernel.
+
+
+
+
+=head1 Socket buffers
+
+
+
+When a client sends a data, the data first is received by the kernel
+which places the data in the socket receiving buffer.
+Then an application such as the web server
+may call C<recv> or C<read> system calls
+to get the data from the buffer.
+When the application wants to send a data, it calls
+C<send> or C<write>
+system calls to place the data in the socket sending buffer.
+Then the kernel manages to send the data from the buffer to the client.
+
+
+
+
+
+The initial sizes of the socket receiving and sending buffers
+are 64K and 32K respectively,
+and are set by the sysctls
+F<net.inet.tcp.recvspace> and
+F<net.inet.tcp.sendspace>.
+Then the kernel automatically grows the buffers of each connection
+as needed, up to the
+F<net.inet.tcp.recvbuf_max> and
+F<net.inet.tcp.sendbuf_max> values (8M by default).
+The sending buffer grows in F<net.inet.tcp.sendbuf_inc> steps
+only when it is nearly full and the client is able to accept more data,
+so the buffers of slow clients stay small,
+while fast clients may use bigger TCP window sizes
+and obtain higher throughput.
+Therefore there is no need to increase the initial buffer sizes.
+
+
+
+
+
+Note that the buffers are not shrunk back on idle connections.
+If there are a lot of simultaneous connections and memory is scarce,
+the maximum amount of memory devoted to one connection can be limited by
+decreasing the F<net.inet.tcp.sendbuf_max> and
+F<net.inet.tcp.recvbuf_max> values.
+
+
+
+
+
+Setting buffer sizes explicitly with the C<sndbuf> and
+C<rcvbuf> parameters of the
+L<ngx_http_core_module> directive
+disables automatic sizing of the corresponding buffer
+for all connections accepted on the listen socket.
+Since nginx uses non-blocking IE<sol>O system calls
+and does not require large buffers to serve a lot of connections,
+these parameters are usually not needed.
+
+
+
+
+=head1 mbufs, mbuf clusters, etc.
+
+
+
+Inside the kernel the buffers are stored in the form of chains of
+memory chunks linked using the I<mbuf> structures.
+The mbuf size is 256 bytes and it can be used to store a small amount
+of data, for example, TCPE<sol>IP header. However, the mbufs point mostly
+to other data stored in the I<mbuf clusters> or I<jumbo clusters>,
+or directly to physical memory pages (I<unmapped mbufs>),
+and in this kind they are used as the chain links only.
+The mbuf cluster size is 2K.
+The jumbo cluster size can be equal to a CPU page size (4K for amd64),
+9K, or 16K.
+The 9K and 16K jumbo clusters are used mainly in local networks with Ethernet
+frames larger than usual 1500 bytes, and they are beyond the scope of
+this article.
+
+
+
+
+
+The limits of the mbufs and clusters are calculated at boot time
+from the amount of physical memory.
+The total memory available for mbufs and clusters,
+F<kern.ipc.maxmbufmem>, is a half of physical memory by default.
+The F<kern.ipc.nmbclusters> and F<kern.ipc.nmbjumbop>
+limits are calculated so that the mbuf clusters and the page size
+jumbo clusters each may take a quarter of this memory.
+For example, on a system with 16G of physical memory,
+this gives about one million mbuf clusters and
+about half a million page size jumbo clusters.
+Note that these are only limits: the memory is allocated on demand.
+These defaults are sufficient for most workloads.
+
+
+
+
+
+To see the current usage of the mbufs and clusters and their limits,
+you may run the command “C<netstat -m>”.
+The lines to watch are:
+
+
+    
+    0/0/0 requests for mbufs denied (mbufs/clusters/mbuf+clusters)
+    0/0/0 requests for jumbo clusters denied (4k/9k/16k)
+
+
+
+Non-zero values there,
+as well as “C<kern.ipc.nmbclusters limit reached>”
+and similar messages in the kernel log,
+mean that the limits were exhausted.
+In this case the limits can be increased on the fly, for example:
+
+
+    
+    sysctl kern.ipc.nmbclusters=2000000
+    sysctl kern.ipc.nmbjumbop=1000000
+
+
+
+The values cannot be decreased at runtime, and an attempt to set
+a value lower than the current one fails.
+The overall F<kern.ipc.maxmbufmem> limit can be changed
+only at boot time in F<E<sol>bootE<sol>loader.conf>,
+and it cannot exceed 3E<sol>4 of physical memory.
+
+
+
+
+=head1 sendfile
+
+
+
+The C<sendfile> system call allows sending a file or its part
+to a socket directly without reading the parts in an application buffer.
+It is enabled in nginx with the
+L<ngx_http_core_module> directive.
+The sendfile passes to the TCPE<sol>IP stack the file pages that are
+already present in FreeBSD cache memory, without copying them.
+Thus, sendfile decreases both CPU usage by omitting two memory copy operations,
+and memory usage by using the cached file pages
+instead of mbuf clusters and jumbo clusters.
+
+
+
+
+
+On platforms with a direct map of physical memory, such as amd64 and arm64,
+sendfile uses unmapped mbufs:
+each such mbuf points directly to several file pages
+(up to 5 pages on 64-bit platforms),
+so that fewer mbufs are needed and the pages need not be mapped
+into the kernel address space.
+This is controlled by the F<kern.ipc.mb_use_ext_pgs>
+sysctl, which is enabled by default on these platforms.
+For the same reason the I<sf_bufs> mappings are not used
+on these platforms, and need no tuning.
+
+
+
+
+
+When sending files from the UFS file system, sendfile does not block
+on disk IE<sol>O:
+if file pages are not in memory, it starts reading them asynchronously
+and queues them in the socket sending buffer as not yet ready data,
+which are sent as soon as the read completes.
+Note that this does not apply to ZFS:
+it caches file data in its own cache (ARC),
+the file pages are filled from it,
+and sendfile blocks while uncached data are read from disk.
+The sendfile statistics can be seen in the
+“C<netstat -m>” output.
+
+
+
+
+
+To read file pages, sendfile uses a pool of physical buffers
+of the vnode pager.
+If the pool is exhausted, sendfile blocks,
+and the process is seen in the “C<zonelimit>” state.
+The pool size can be increased with the
+F<vm.vnode_pbufs> tunable in F<E<sol>bootE<sol>loader.conf>.
+
+
+
+
+
+The kernel TLS (kTLS) allows using sendfile for SSL connections as well:
+the data are encrypted by the kernel when sending,
+which also requires unmapped mbufs.
+The kTLS support is included in the default kernel configuration
+(C<options KERN_TLS>) and is enabled by the
+F<kern.ipc.tls.enable> sysctl, which is on by default.
+In nginx, kTLS is used with OpenSSLE<nbsp>3.0 or newer built with kTLS support
+(the base system OpenSSL on amd64 and arm64 is built so by default),
+when enabled with the
+L<ngx_http_ssl_module> directive:
+
+
+    
+    ssl_conf_command  Options KTLS;
+
+
+
+
+
+
+
+=head1 Outgoing connections
+
+
+
+Each outgoing connection, such as to a proxied server, uses
+a local port automatically chosen from the range of
+F<net.inet.ip.portrange.first> to
+F<net.inet.ip.portrange.last>,
+10000–65535 by default.
+The same local port can be used simultaneously for connections
+to different addresses and ports, thus the range limits the number
+of connections to the same proxied server.
+The connections closed by nginx are kept in the I<TIME_WAIT> state
+for 2 × F<net.inet.tcp.msl> (60 seconds by default)
+and keep using their ports.
+For connections to local addresses, the
+F<net.inet.tcp.msl_local> value is used instead,
+10 milliseconds by default.
+
+
+
+
+
+The preferred way to reduce the number of the outgoing connections
+is to use
+L<keepalive
+connections|ngx_http_upstream_module> to proxied servers.
+Otherwise, the range can be extended:
+
+
+    
+    net.inet.ip.portrange.first=1024
+    net.inet.ip.portrange.last=65535
+
+
+
+Note that in this case the ports may clash with ports of other
+services listening on the same addresses.
+Other ways are to use several proxied server addresses or ports, or
+several local addresses with the
+L<ngx_http_proxy_module> directive.
+
+
+
+
+
+By default, the local port is chosen randomly.
+At high rates of outgoing connections, sequential port allocation
+can be used instead, so that each port is reused as late as possible:
+
+
+    
+    net.inet.ip.portrange.randomized=0
+
+
+
+Note that this makes local ports predictable,
+and thus makes spoofing attacks easier.
+
+
+
+
+=head1 Finalizing connection
+
+
+
+When nginx closes a connection, the connection moves to the
+I<FIN_WAIT_2> state after the client acknowledges the closing,
+and stays there until the client closes the connection on its side.
+If the client never does this, for example, if it has disappeared,
+the connection is kept until it is idle for
+F<net.inet.tcp.keepcnt> × F<net.inet.tcp.keepintvl>,
+that is 10 minutes by default.
+The following setting allows dropping such connections after the
+F<net.inet.tcp.finwait2_timeout> (60 seconds by default):
+
+
+    
+    net.inet.tcp.fast_finwait2_recycle=1
+
+
+
+
+
+
+

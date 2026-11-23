@@ -1,5 +1,0 @@
-dir="../../ngx_metrics"
-ar="${dir}/target/release/libngx_metrics.a"
-
-LINK_DEPS="$LINK_DEPS $ar"
-CORE_LIBS="$CORE_LIBS $ar"

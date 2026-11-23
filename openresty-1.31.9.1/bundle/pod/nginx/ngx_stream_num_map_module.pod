@@ -1,0 +1,148 @@
+=encoding utf-8
+
+=head1 NAME
+
+ngx_stream_num_map_module - Module ngx_stream_num_map_module
+
+
+
+
+=head1
+
+
+
+The C<ngx_stream_num_map_module> module (1.29.3)
+creates variables whose values depend on numeric values
+or numeric value ranges.
+
+
+
+
+
+
+B<NOTE>
+
+This module is available as part of our
+commercial subscription.
+
+
+
+
+
+=head1 Example Configuration
+
+
+
+
+    
+    num_map $remote_port $port_allow {
+        default    0;
+    
+        80         1;
+        443        1;
+        <&#61;1023     0;
+        8080-8090  1;
+    }
+
+
+
+
+
+
+=head1 Directives
+
+=head2 num_map
+
+
+B<syntax:> num_map I<
+    [I<C<$number>>]
+    I<C<$variable>> { B<...> } >
+
+
+
+B<context:> I<stream>
+
+
+
+
+
+Describes how the values of the specified variable depend on numeric values
+or numeric value ranges.
+
+
+
+
+
+
+B<NOTE>
+
+Since variables are evaluated only when used, the mere existence
+of even a large number of declared “C<num_map>” variables
+does not cause any extra costs for connection processing.
+
+
+
+
+
+
+Parameters inside the C<num_map> block specify a mapping
+between source and resulting values.
+
+
+
+
+
+Source values are specified as numbers or as numeric ranges.
+
+
+
+
+
+The following special parameters are also supported:
+
+=over
+
+
+
+=item C<default>
+
+
+
+
+sets the resulting value if the source value matches none
+of the specified variants.
+When C<default> is not specified, the default
+resulting value will be an empty string.
+
+
+
+=item C<include>
+
+
+
+
+includes a file with values.
+There can be several inclusions.
+
+
+
+=item C<volatile>
+
+
+
+
+indicates that the variable is not cacheable.
+
+
+
+
+=back
+
+
+
+
+
+
+
+
+
