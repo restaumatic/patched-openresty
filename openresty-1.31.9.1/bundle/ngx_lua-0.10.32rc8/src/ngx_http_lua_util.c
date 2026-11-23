@@ -12,6 +12,7 @@
 
 
 #include "nginx.h"
+#include "ngx_metrics.h"
 #include "ngx_http_lua_directive.h"
 #include "ngx_http_lua_util.h"
 #include "ngx_http_lua_exception.h"
@@ -1192,7 +1193,18 @@ ngx_http_lua_run_thread(lua_State *L, ngx_http_request_t *r,
             ngx_http_lua_assert(orig_coctx->co_top + nrets
                                 == lua_gettop(orig_coctx->co));
 
+            char stack[1024]; 
+            int stack_len = ngx_metrics_dump_lua_stack(orig_coctx->co, stack, sizeof(stack));
+            int64_t start = ngx_precise_time();
+
             rv = lua_resume(orig_coctx->co, nrets);
+
+            int64_t elapsed = ngx_precise_time() - start;
+            if(elapsed > 100000000) { // 100ms
+                ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                    "slow lua handler (%dms) at %s", elapsed / 1000000, stack_len > 0 ? stack : "(unknown)");
+            }
+            
 
 #if (NGX_PCRE)
             /* XXX: work-around to nginx regex subsystem */

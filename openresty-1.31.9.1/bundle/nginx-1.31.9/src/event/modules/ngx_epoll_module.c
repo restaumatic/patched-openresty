@@ -8,6 +8,7 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_event.h>
+#include <ngx_metrics.h>
 
 
 #if (NGX_TEST_BUILD_EPOLL)
@@ -779,6 +780,7 @@ ngx_epoll_notify(ngx_event_handler_pt handler)
 
 #endif
 
+static int64_t last_epoll_finished_at = 0;
 
 static ngx_int_t
 ngx_epoll_process_events(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags)
@@ -797,7 +799,12 @@ ngx_epoll_process_events(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags)
     ngx_log_debug1(NGX_LOG_DEBUG_EVENT, cycle->log, 0,
                    "epoll timer: %M", timer);
 
+    if(last_epoll_finished_at != 0) {
+        ngx_metric_report(NGX_METRIC_EVENT_LOOP_LATENCY_NS, ngx_precise_time() - last_epoll_finished_at);
+    }
+
     events = epoll_wait(ep, event_list, (int) nevents, timer);
+    last_epoll_finished_at = ngx_precise_time();
 
     err = (events == -1) ? ngx_errno : 0;
 
@@ -898,7 +905,7 @@ ngx_epoll_process_events(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags)
                 ngx_post_event(rev, queue);
 
             } else {
-                rev->handler(rev);
+                NGX_CALL_HANDLER(rev->handler, rev);
             }
         }
 
@@ -927,7 +934,7 @@ ngx_epoll_process_events(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags)
                 ngx_post_event(wev, &ngx_posted_events);
 
             } else {
-                wev->handler(wev);
+                NGX_CALL_HANDLER(wev->handler, wev);
             }
         }
     }

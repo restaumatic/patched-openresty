@@ -1,0 +1,16 @@
+[package]
+name = "ngx_metrics"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib"]
+
+[build-dependencies]
+bindgen = "0.71.1"
+
+[dependencies]
+libc = "0.2.169"
+
+[lints.clippy]
+pedantic = "warn"

@@ -8,6 +8,7 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_event.h>
+#include <ngx_metrics.h>
 
 
 /*
@@ -835,9 +836,22 @@ ngx_file_info_wrapper(ngx_str_t *name, ngx_open_file_info_t *of,
 #endif
 }
 
+static ngx_int_t
+ngx_open_and_stat_file_real(ngx_str_t *name, ngx_open_file_info_t *of,
+    ngx_log_t *log);
 
 static ngx_int_t
 ngx_open_and_stat_file(ngx_str_t *name, ngx_open_file_info_t *of,
+    ngx_log_t *log)
+{
+  int64_t start = ngx_precise_time();
+  ngx_int_t result = ngx_open_and_stat_file_real(name, of, log);
+  ngx_metric_report(NGX_METRIC_OPEN_AND_STAT_FILE_TIME_NS, ngx_precise_time() - start);
+  return result;
+}
+
+static ngx_int_t
+ngx_open_and_stat_file_real(ngx_str_t *name, ngx_open_file_info_t *of,
     ngx_log_t *log)
 {
     ngx_fd_t         fd;
