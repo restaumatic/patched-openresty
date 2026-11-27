@@ -1,0 +1,688 @@
+=encoding utf-8
+
+=head1 NAME
+
+ngx_http_acme_module - Module ngx_http_acme_module
+
+
+
+
+=head1
+
+
+
+The C<ngx_http_acme_module> module implements
+the automatic certificate management
+(L<ACMEv2|https://datatracker.ietf.org/doc/html/rfc8555>)
+protocol.
+
+
+
+
+
+The source code of the module is available
+L<here|https://github.com/nginx/nginx-acme>.
+Download and install instructions are available
+L<here|https://github.com/nginx/nginx-acme/blob/main/README.md>.
+
+
+
+
+
+The module is also available in a prebuilt
+C<nginx-module-acme>
+L<package|linux_packages>
+and in C<nginx-plus-module-acme> package
+as part of our
+commercial subscription since 1.29.0.
+
+
+
+
+=head1 Example Configuration
+
+
+
+
+    
+    resolver 127.0.0.1:53;
+    
+    acme_issuer example {
+        uri         https://acme.example.com/directory;
+        contact     admin@example.test;
+        state_path  /var/cache/nginx/acme-example;
+        accept_terms_of_service;
+    }
+    
+    acme_shared_zone zone=ngx_acme_shared:1M;
+    
+    server {
+        listen 443 ssl;
+        server_name  .example.test;
+    
+        acme_certificate example;
+    
+        ssl_certificate       $acme_certificate;
+        ssl_certificate_key   $acme_certificate_key;
+    
+        # do not parse the certificate on each request
+        ssl_certificate_cache max=2;
+    }
+    
+    server {
+        # listener on port 80 is required to process ACME HTTP-01 challenges
+        listen 80;
+    
+        location / {
+            return 404;
+        }
+    }
+
+
+
+
+
+
+=head1 Directives
+
+=head2 acme_issuer
+
+
+B<syntax:> acme_issuer I<I<C<name>> { B<...> } >
+
+
+
+B<context:> I<http>
+
+
+
+
+
+Defines an ACME certificate issuer object.
+
+
+
+
+
+
+
+=head2 uri
+
+
+B<syntax:> uri I<I<C<uri>>>
+
+
+
+B<context:> I<acme_issuer>
+
+
+
+
+
+The
+L<directory URL|https://datatracker.ietf.org/doc/html/rfc8555#section-7.1.1>
+of the ACME server.
+This directive is mandatory.
+
+
+
+
+
+
+
+=head2 account_key
+
+
+B<syntax:> account_key I<I<C<alg>>[:I<C<size>>] E<verbar> I<C<file>>>
+
+
+
+B<context:> I<acme_issuer>
+
+
+
+
+
+The account's private key used for request authentication.
+
+
+
+
+
+Accepted values:
+
+=over
+
+
+
+
+=item *
+
+C<ecdsa>:I<C<256>>E<sol>I<C<384>>E<sol>I<C<521>>
+for ES256, ES384, or ES512 JSON Web Signature algorithms
+
+
+
+=item *
+
+C<rsa>:I<C<2048>>E<sol>I<C<3072>>E<sol>I<C<4096>>
+for RS256.
+
+
+
+=item *
+
+File path for an existing key, using one of the algorithms above.
+
+
+
+=back
+
+
+
+
+
+
+
+The generated account keys are preserved across reloads,
+but will be lost on restart unless L</state_path> is configured.
+
+
+
+
+
+
+
+=head2 challenge
+
+
+B<syntax:> challenge I<I<C<type>>>
+
+
+B<default:> I<http-01>
+
+
+B<context:> I<acme_issuer>
+
+
+
+This directive appeared in version 0.2.0.
+
+
+
+
+
+Specifies the ACME challenge type to be used for the issuer.
+
+
+
+
+
+Accepted values:
+
+=over
+
+
+
+
+=item *
+
+C<http-01> (C<http>)
+
+
+
+=item *
+
+C<tls-alpn-01> (C<tls-alpn>)
+
+
+
+=back
+
+
+
+
+
+
+
+
+B<NOTE>
+
+ACME challenges are versioned.
+If an unversioned name is specified,
+the module automatically selects the latest implemented version.
+
+
+
+
+
+
+
+
+=head2 common_name_in_csr
+
+
+B<syntax:> common_name_in_csr I<C<on> E<verbar> C<off>>
+
+
+B<default:> I<off>
+
+
+B<context:> I<acme_issuer>
+
+
+
+This directive appeared in version 0.4.0.
+
+
+
+
+
+If enabled, sets the Subject Common Name in the certificate request
+to the first DNS name or the first IP address provided.
+
+
+
+
+
+
+B<NOTE>
+
+Enabling this option may result in rejected certificate requests.
+
+
+B<NOTE>
+
+Prior to version 0.4.0, the Subject Common Name was always set.
+
+
+
+
+
+
+
+
+=head2 contact
+
+
+B<syntax:> contact I<I<C<URL>>>
+
+
+
+B<context:> I<acme_issuer>
+
+
+
+
+
+Sets an array of URLs that the ACME server can use
+to contact the client regarding account issues.
+The C<mailto:> scheme will be used
+unless specified explicitly.
+
+
+
+
+
+
+
+=head2 external_account_key
+
+
+B<syntax:> external_account_key I<I<C<kid>> I<C<file>>>
+
+
+
+B<context:> I<acme_issuer>
+
+
+
+This directive appeared in version 0.2.0.
+
+
+
+
+
+Specifies a key identifier I<C<kid>> and a I<C<file>>
+with the MAC key for
+L<external account authorization|https://datatracker.ietf.org/doc/html/rfc8555#section-7.3.4>.
+
+
+
+
+
+The value C<data>:I<C<key>> can be specified
+instead of the I<C<file>>, which loads a key directly from
+the configuration without using intermediate files.
+
+
+
+
+
+In both cases, the key is expected to be encoded in
+L<base64url|https://datatracker.ietf.org/doc/html/rfc4648#section-5>.
+
+
+
+
+
+
+
+=head2 preferred_chain
+
+
+B<syntax:> preferred_chain I<I<C<name>>>
+
+
+
+B<context:> I<acme_issuer>
+
+
+
+This directive appeared in version 0.3.0.
+
+
+
+
+
+Specifies the preferred certificate chain.
+
+
+
+
+
+If the ACME server offers multiple certificate chains,
+prefer the chain with the topmost certificate issued from the
+Subject Common Name I<C<name>>.
+If there are no matches, the default chain will be used.
+
+
+
+
+
+
+
+=head2 profile
+
+
+B<syntax:> profile I<I<C<name>> [C<require>]>
+
+
+
+B<context:> I<acme_issuer>
+
+
+
+This directive appeared in version 0.3.0.
+
+
+
+
+
+Requests the
+L<certificate profile|https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles> I<C<name>> from the ACME server.
+
+
+
+
+
+The C<require> parameter will cause certificate renewals
+to fail if the server does not support the specified profile.
+
+
+
+
+
+
+
+=head2 ssl_trusted_certificate
+
+
+B<syntax:> ssl_trusted_certificate I<I<C<file>>>
+
+
+
+B<context:> I<acme_issuer>
+
+
+
+
+
+Specifies a I<C<file>> with trusted CA certificates in the PEM format
+used to verify the certificate
+of the ACME server.
+
+
+
+
+
+
+
+=head2 ssl_verify
+
+
+B<syntax:> ssl_verify I<
+    C<on> E<verbar> C<off>>
+
+
+B<default:> I<on>
+
+
+B<context:> I<acme_issuer>
+
+
+
+
+
+Enables or disables verification of the ACME server certificate.
+
+
+
+
+
+
+
+=head2 state_path
+
+
+B<syntax:> state_path I<I<C<path>> E<verbar> C<off>>
+
+
+B<default:> I<acme_E<lt>issuerE<gt>>
+
+
+B<context:> I<acme_issuer>
+
+
+
+
+
+Defines a directory for storing the module data
+that can be persisted across restarts.
+This can improve the load time by skipping some requests on startup,
+and avoid hitting request rate limits on the ACME server.
+
+
+
+
+
+The directory contains sensitive content, such as
+the account key, issued certificates, and private keys.
+
+
+
+
+
+The C<off> parameter (0.2.0) disables storing the account
+information and issued certificates on disk.
+
+
+
+
+
+
+B<NOTE>
+
+Prior to version 0.2.0, the state directory was not created by default.
+
+
+
+
+
+
+
+
+=head2 accept_terms_of_service
+
+
+B<syntax:> accept_terms_of_service I<>
+
+
+
+B<context:> I<acme_issuer>
+
+
+
+
+
+Agrees to the terms of service under which the ACME server will be used.
+Some servers require accepting the terms of service
+before account registration.
+The terms are usually available on the ACME server's website,
+and the URL will be printed to the error log if necessary.
+
+
+
+
+
+
+
+=head2 acme_shared_zone
+
+
+B<syntax:> acme_shared_zone I<
+    C<zone>=I<C<name>>:I<C<size>>>
+
+
+B<default:> I<zone=ngx_acme_shared:256k>
+
+
+B<context:> I<http>
+
+
+
+
+
+Allows increasing the size of in-memory storage of the module.
+The shared memory zone will be used to store the issued certificates,
+keys and challenge data for all the configured certificate issuers.
+
+
+
+
+
+The default zone size is sufficient to hold approximately
+50 ECDSA prime256v1 keys or 35 RSA 2048 keys.
+
+
+
+
+
+
+
+=head2 acme_certificate
+
+
+B<syntax:> acme_certificate I<
+    I<C<issuer>>
+    [I<C<identifier>> ...]
+    [C<key>=I<C<alg>>[:I<C<size>>]]>
+
+
+
+B<context:> I<server>
+
+
+
+
+
+Defines a certificate with the list of C<identifiers>
+requested from issuer C<issuer>.
+
+
+
+
+
+The explicit list of identifiers can be omitted.
+In this case, the identifiers will be taken from the
+L<ngx_http_core_module> directive
+in the same L<ngx_http_core_module> block.
+Not all values accepted in the C<server_name>
+are valid certificate identifiers:
+regular expressions and wildcards are not supported.
+
+
+
+
+
+The key parameter sets the type of a generated private key.
+Supported key algorithms and sizes:
+C<ecdsa:256> (default),
+C<ecdsa:384>,
+C<ecdsa:521>,
+C<rsa:2048>,
+C<rsa:3072>,
+C<rsa:4096>.
+
+
+
+
+
+
+
+=head1 Embedded Variables
+
+
+
+The C<ngx_http_acme_module> module supports embedded variables,
+valid in the
+L<ngx_http_core_module> block with the
+L</acme_certificate> directive:
+
+
+
+
+
+
+=over
+
+
+
+=item C<$acme_certificate>
+
+
+
+
+SSL certificate that can be passed to the
+L<ngx_http_ssl_module>
+
+
+
+=item C<$acme_certificate_key>
+
+
+
+
+SSL certificate private key that can be passed to
+L<ngx_http_ssl_module>
+
+
+
+
+=back
+
+
+
+
+
+

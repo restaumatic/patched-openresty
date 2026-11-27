@@ -1,0 +1,787 @@
+=encoding utf-8
+
+=head1 NAME
+
+ngx_http_oidc_module - Module ngx_http_oidc_module
+
+
+
+
+=head1
+
+
+
+The C<ngx_http_oidc_module> module (1.27.4)
+implements authentication as a Relying Party in OpenID Connect using the
+L<Authorization Code Flow|https://openid.net/specs/openid-connect-core-1_0.html#CodeFlowAuth>.
+
+
+
+
+
+The module expects the OpenID Provider's configuration to be available via
+L<metadata|https://openid.net/specs/openid-connect-discovery-1_0.html#ProviderConfig> and requires dynamic
+L<resolver|ngx_http_core_module>.
+
+
+
+
+
+The module can be combined with other access modules
+via the L<ngx_http_core_module> directive.
+Note that the module may still block requests even with
+C<satisfy any;>
+as an OpenID Provider might not redirect the user back to nginx.
+
+
+
+
+
+
+B<NOTE>
+
+This module is available as part of our
+commercial subscription.
+
+
+
+
+
+=head1 Example Configuration
+
+
+
+
+    
+    http {
+        resolver 10.0.0.1;
+    
+        oidc_provider my_idp {
+            issuer        "https://provider.domain";
+            client_id     "unique_id";
+            client_secret "unique_secret";
+        }
+    
+        server {
+            location / {
+                auth_oidc my_idp;
+    
+                proxy_set_header username $oidc_claim_sub;
+                proxy_pass       http://backend;
+            }
+        }
+    }
+
+
+The example assumes that the
+“C<https:E<sol>E<sol>E<lt>nginx-hostE<gt>E<sol>oidc_callback>”
+Redirection URI is configured on the OpenID Provider's side.
+The path can be customized with the L</redirect_uri> directive.
+
+
+
+
+=head1 Directives
+
+=head2 oidc_provider
+
+
+B<syntax:> oidc_provider I<I<C<name>> { B<...> } >
+
+
+
+B<context:> I<http>
+
+
+
+
+
+Defines an OpenID Provider for use with the L</auth_oidc> directive.
+
+
+
+
+
+
+
+=head2 auth_oidc
+
+
+B<syntax:> auth_oidc I<I<C<name>> E<verbar> C<off>>
+
+
+B<default:> I<off>
+
+
+B<context:> I<http>
+
+
+B<context:> I<server>
+
+
+B<context:> I<location>
+
+
+
+
+
+Enables end user authentication with the
+specified OpenID Provider.
+
+
+
+
+
+Parameter value can contain variables (1.29.0).
+
+
+
+
+
+The special value C<off> cancels the effect
+of the C<auth_oidc> directive
+inherited from the previous configuration level.
+
+
+
+
+
+
+
+=head2 issuer
+
+
+B<syntax:> issuer I<I<C<URL>>>
+
+
+
+B<context:> I<oidc_provider>
+
+
+
+
+
+Sets the Issuer Identifier URL of the OpenID Provider;
+required directive.
+The URL must exactly match the value of “C<issuer>”
+in the OpenID Provider metadata
+and requires the “C<https>” scheme.
+
+
+
+
+
+
+
+=head2 client_id
+
+
+B<syntax:> client_id I<I<C<string>>>
+
+
+
+B<context:> I<oidc_provider>
+
+
+
+
+
+Specifies the client ID of the Relying Party;
+required directive.
+
+
+
+
+
+
+
+=head2 client_secret
+
+
+B<syntax:> client_secret I<I<C<string>>>
+
+
+
+B<context:> I<oidc_provider>
+
+
+
+
+
+Specifies a secret value
+used to authenticate the Relying Party with the OpenID Provider.
+The supported
+L<authentication
+methods|https://openid.net/specs/openid-connect-core-1_0.html#ClientAuthentication> are
+C<client_secret_basic> and
+C<client_secret_post> (1.29.3).
+The method is selected based on the OpenID Provider metadata
+with a preference to C<client_secret_basic>.
+
+
+
+
+
+
+
+=head2 config_url
+
+
+B<syntax:> config_url I<I<C<URL>>>
+
+
+B<default:> I<E<lt>issuerE<gt>E<sol>.well-knownE<sol>openid-configuration>
+
+
+B<context:> I<oidc_provider>
+
+
+
+
+
+Sets a custom URL to retrieve the OpenID Provider metadata.
+
+
+
+
+
+
+
+=head2 cookie_name
+
+
+B<syntax:> cookie_name I<I<C<name>>>
+
+
+B<default:> I<NGX_OIDC_SESSION>
+
+
+B<context:> I<oidc_provider>
+
+
+
+
+
+Sets the name of a session cookie.
+
+
+
+
+
+
+
+=head2 extra_auth_args
+
+
+B<syntax:> extra_auth_args I<I<C<string>>>
+
+
+
+B<context:> I<oidc_provider>
+
+
+
+
+
+Sets additional query arguments for the
+L<authentication
+request|https://openid.net/specs/openid-connect-core-1_0.html#AuthRequest> URL.
+
+    
+    extra_auth_args "display=page&prompt=login";
+
+
+
+
+
+
+
+
+
+=head2 frontchannel_logout_uri
+
+
+B<syntax:> frontchannel_logout_uri I<I<C<uri>>>
+
+
+
+B<context:> I<oidc_provider>
+
+
+
+This directive appeared in version 1.29.3.
+
+
+
+
+
+Defines the URI path for triggering
+L<front-channel
+logout|https://openid.net/specs/openid-connect-frontchannel-1_0.html>.
+For the logout request to be associated with a user session,
+it must either include the module session cookie or provide
+both the “C<iss>” and “C<sid>” arguments.
+It is recommended to configure the OpenID Provider to set the
+“C<iss>” and “C<sid>” arguments
+when invoking this endpoint.
+
+
+
+
+
+
+
+=head2 pkce
+
+
+B<syntax:> pkce I<C<on> E<verbar> C<off>>
+
+
+
+B<context:> I<oidc_provider>
+
+
+
+This directive appeared in version 1.29.3.
+
+
+
+
+
+Explicitly enables or disables PKCE.
+By default, PKCE is automatically enabled
+based on OpenID Provider metadata.
+
+
+
+
+
+
+
+=head2 redirect_uri
+
+
+B<syntax:> redirect_uri I<I<C<uri>>>
+
+
+B<default:> I<E<sol>oidc_callback>
+
+
+B<context:> I<oidc_provider>
+
+
+
+
+
+Defines the Redirection URI path for post-authentication redirects
+expected by the module from the OpenID Provider.
+The I<C<uri>> must match the configuration on the Provider's side.
+
+
+
+
+
+Absolute “C<https>” URIs are supported since 1.29.0.
+
+
+
+
+
+
+
+=head2 logout_uri
+
+
+B<syntax:> logout_uri I<I<C<uri>>>
+
+
+
+B<context:> I<oidc_provider>
+
+
+
+This directive appeared in version 1.29.0.
+
+
+
+
+
+Defines the URI path for initiating session logout.
+Upon session termination, the user is redirected to
+L<Provider's
+Logout Endpoint|https://openid.net/specs/openid-connect-rpinitiated-1_0.html#OPMetadata>
+or to the post logout page.
+If neither is configured, the built-in post logout page is displayed.
+
+
+
+
+
+
+
+=head2 post_logout_uri
+
+
+B<syntax:> post_logout_uri I<I<C<uri>>>
+
+
+
+B<context:> I<oidc_provider>
+
+
+
+This directive appeared in version 1.29.0.
+
+
+
+
+
+Defines the path or absolute URI
+to redirect the user to after the logout.
+The I<C<uri>> must match the configuration on the Provider's side.
+If the post logout page is served by NGINX,
+the OIDC module shouldn't be enabled for this location:
+
+    
+    http {
+        oidc_provider my_idp {
+            ...
+    
+            logout_uri      /logout;
+            post_logout_uri /logged_out_page.html;
+        }
+    
+        server {
+            auth_oidc my_idp;
+    
+            location /logged_out_page.html {
+                auth_oidc off;
+            }
+        }
+    }
+
+
+
+
+
+
+
+
+=head2 logout_token_hint
+
+
+B<syntax:> logout_token_hint I<C<on> E<verbar> C<off>>
+
+
+B<default:> I<off>
+
+
+B<context:> I<oidc_provider>
+
+
+
+This directive appeared in version 1.29.0.
+
+
+
+
+
+Adds the
+L<C<id_token_hint>|https://openid.net/specs/openid-connect-rpinitiated-1_0.html#RPLogout>
+argument to the
+L<Provider's
+Logout Endpoint|https://openid.net/specs/openid-connect-rpinitiated-1_0.html#OPMetadata>
+when redirecting user during logout.
+This argument can be required by some OpenID Providers.
+
+
+
+
+
+
+
+=head2 scope
+
+
+B<syntax:> scope I<I<C<scope>> ...>
+
+
+B<default:> I<openid>
+
+
+B<context:> I<oidc_provider>
+
+
+
+
+
+Sets requested scopes.
+The C<openid> scope is always required by OIDC.
+
+
+
+
+
+
+
+=head2 session_store
+
+
+B<syntax:> session_store I<I<C<name>>>
+
+
+
+B<context:> I<oidc_provider>
+
+
+
+
+
+Specifies a custom
+L<key-value database|ngx_http_keyval_module>
+that stores session data.
+By default, an 8-megabyte key-value database named 
+C<oidc_default_store_E<lt>provider nameE<gt>>
+is created automatically.
+
+B<NOTE>
+
+A separate key-value database should be configured for each Provider
+to prevent session reuse across providers.
+
+
+
+
+
+
+
+
+=head2 session_sync_leeway
+
+
+B<syntax:> session_sync_leeway I<I<C<time>>>
+
+
+B<default:> I<0>
+
+
+B<context:> I<oidc_provider>
+
+
+
+This directive appeared in version 1.31.6.
+
+
+
+
+
+Sets the maximum wait time for a session to appear in the
+key-value zone
+if a request contains a session cookie
+but the corresponding session is not found.
+This allows for session
+L<synchronization|ngx_stream_zone_sync_module>
+delays between cluster nodes.
+
+
+
+
+
+The value must be in the range from C<0> to
+C<5s>.
+The default value of C<0> disables waiting.
+It is recommended to set the smallest possible value.
+
+
+
+
+
+
+
+=head2 session_timeout
+
+
+B<syntax:> session_timeout I<I<C<time>>>
+
+
+B<default:> I<8h>
+
+
+B<context:> I<oidc_provider>
+
+
+
+
+
+Sets a timeout after which the session is deleted, unless it was
+L<refreshed|https://openid.net/specs/openid-connect-core-1_0.html#RefreshTokens>.
+
+
+
+
+
+
+
+=head2 ssl_crl
+
+
+B<syntax:> ssl_crl I<I<C<file>>>
+
+
+
+B<context:> I<oidc_provider>
+
+
+
+
+
+Specifies a I<C<file>> with revoked certificates (CRL)
+in the PEM format used to verify
+the certificates of the OpenID Provider endpoints.
+When using intermediate certificates, their CRLs should be
+specified in the same file.
+
+
+
+
+
+
+
+=head2 ssl_trusted_certificate
+
+
+B<syntax:> ssl_trusted_certificate I<I<C<file>>>
+
+
+B<default:> I<system CA bundle>
+
+
+B<context:> I<oidc_provider>
+
+
+
+
+
+Specifies a I<C<file>> with trusted CA certificates in the PEM format
+used to verify
+the certificates of the OpenID Provider endpoints.
+
+
+
+
+
+
+
+=head2 userinfo
+
+
+B<syntax:> userinfo I<C<on> E<verbar> C<off>>
+
+
+B<default:> I<off>
+
+
+B<context:> I<oidc_provider>
+
+
+
+This directive appeared in version 1.29.0.
+
+
+
+
+
+Enables downloading of the
+L<UserInfo|https://openid.net/specs/openid-connect-core-1_0.html#UserInfo>
+data and makes UserInfo claims available via the 
+$oidc_claim_C<name> variables.
+
+
+
+
+
+
+
+=head1 Embedded Variables
+
+
+
+The C<ngx_http_oidc_module> module supports embedded variables:
+
+
+
+
+
+
+=over
+
+
+
+=item C<$oidc_id_token>
+
+
+
+
+ID token
+
+
+
+=item C<$oidc_access_token>
+
+
+
+
+access token
+
+
+
+=item C<$oidc_claim_>I<C<name>>
+
+
+
+
+top-level ID token or UserInfo claim
+
+
+Nested claims can be fetched with the
+L<auth_jwt|ngx_http_auth_jwt_module> module:
+
+    
+    http {
+        auth_jwt_claim_set $postal_code address postal_code;
+    
+        server {
+            location / {
+                auth_oidc my_idp;
+                auth_jwt  off token=$oidc_id_token;
+    
+                proxy_set_header x-postal_code $postal_code;
+                proxy_pass       http://backend;
+            }
+        }
+    }
+
+
+
+
+
+
+
+
+=item C<$oidc_userinfo>
+
+
+
+
+UserInfo data in the JSON format (1.29.0)
+
+
+
+
+=back
+
+
+
+
+
+

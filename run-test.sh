@@ -36,9 +36,9 @@ Arguments:
   <test-file>    Path to the .t test file (absolute or relative)
 
 Examples:
-  $(basename "$0") openresty-1.27.1.1/bundle/echo-nginx-module-0.63/t/echo.t
-  $(basename "$0") /workspace/patched-openresty/openresty-1.27.1.1/bundle/echo-nginx-module-0.63/t/echo.t
-  $(basename "$0") bundle/echo-nginx-module-0.63/t/echo.t
+  $(basename "$0") openresty-1.31.9.1/bundle/echo-nginx-module-0.66/t/echo.t
+  $(basename "$0") /workspace/patched-openresty/openresty-1.31.9.1/bundle/echo-nginx-module-0.66/t/echo.t
+  $(basename "$0") bundle/echo-nginx-module-0.66/t/echo.t
 
 Options:
   -h, --help     Display this help message
@@ -80,15 +80,15 @@ else
     # Relative path - try multiple possibilities
     if [[ -f "$REPO_ROOT/$TEST_FILE" ]]; then
         TEST_FILE_FULL="$REPO_ROOT/$TEST_FILE"
-    elif [[ -f "$REPO_ROOT/openresty-1.27.1.1/$TEST_FILE" ]]; then
-        TEST_FILE_FULL="$REPO_ROOT/openresty-1.27.1.1/$TEST_FILE"
+    elif [[ -f "$REPO_ROOT/openresty-1.31.9.1/$TEST_FILE" ]]; then
+        TEST_FILE_FULL="$REPO_ROOT/openresty-1.31.9.1/$TEST_FILE"
     elif [[ -f "$TEST_FILE" ]]; then
         TEST_FILE_FULL="$(realpath "$TEST_FILE")"
     else
         log_error "Test file not found: $TEST_FILE"
         log_error "Tried locations:"
         log_error "  - $REPO_ROOT/$TEST_FILE"
-        log_error "  - $REPO_ROOT/openresty-1.27.1.1/$TEST_FILE"
+        log_error "  - $REPO_ROOT/openresty-1.31.9.1/$TEST_FILE"
         log_error "  - $TEST_FILE (current directory)"
         exit 1
     fi
@@ -103,7 +103,7 @@ fi
 log_success "Found test file: $TEST_FILE_FULL"
 
 # Define paths
-OPENRESTY_DIR="$REPO_ROOT/openresty-1.27.1.1"
+OPENRESTY_DIR="$REPO_ROOT/openresty-1.31.9.1"
 INSTALL_DIR="$(realpath $REPO_ROOT)/test-install/usr/local/openresty"
 NGINX_BINARY="$INSTALL_DIR/nginx/sbin/nginx"
 TEST_NGINX_LIB="/workspace/test-nginx/lib"
